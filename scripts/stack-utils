@@ -1,0 +1,49 @@
+#!/bin/bash
+set -e
+set -u
+
+shopt -s expand_aliases
+alias gzip="gzip -n -9"
+
+. /etc/os-release
+export STACK_NAME="${STACK_NAME:?name is required}"
+export STACK_VERSION="${STACK_VERSION:?version is required}"
+export OS_NAME="${OS_NAME:-linux}"
+export OS_ARCH=$(dpkg --print-architecture)
+export OS_FLAVOUR="${OS_FLAVOUR:-${ID}-${VERSION_ID}}"
+export TARNAME="${STACK_NAME}-${STACK_VERSION}-${OS_NAME}-${OS_ARCH}-${OS_FLAVOUR}"
+
+_is_sourced() {
+	# https://unix.stackexchange.com/a/215279
+	[ "${#FUNCNAME[@]}" -ge 2 ] \
+		&& [ "${FUNCNAME[0]}" = '_is_sourced' ] \
+		&& [ "${FUNCNAME[1]}" = 'source' ]
+}
+
+function generate-stack-template() {
+  mkdir -p /workspace/"${TARNAME}"/meta
+  mkdir -p /workspace/"${TARNAME}"/data
+  touch /workspace/"${TARNAME}"/meta/dependencies
+  touch /workspace/"${TARNAME}"/meta/preinstall
+  touch /workspace/"${TARNAME}"/meta/postinstall
+  chmod +x /workspace/"${TARNAME}"/meta/preinstall /workspace/"${TARNAME}"/meta/postinstall
+}
+
+function generate-stack-package() {
+  dist_dir="${1:? miss dist dir}"
+  tar --numeric-owner -czf "${dist_dir}"/${TARNAME}.tar.gz -C /workspace/"${TARNAME}" . --transform='s,^./,,'
+  rm -rf /workspace/"${TARNAME}"
+}
+
+function build-stack() {
+  generate-stack-template
+  build
+  generate-stack-package "$1"
+}
+
+
+if ! _is_sourced; then
+  action=$1
+  shift 1
+  $action "$@"
+fi

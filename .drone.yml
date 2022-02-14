@@ -1,0 +1,46 @@
+kind: pipeline
+type: exec
+name: linux-amd64
+
+platform:
+  arch: amd64
+  os: linux
+
+steps:
+- name: publish
+  commands:
+  - CODENAME=bullseye ./build.sh all ${DRONE_TAG}
+  environment:
+    OSS_ENDPOINT:
+      from_secret: oss_endpoint
+    OSS_ACCESS_KEY_ID:
+      from_secret: oss_access_key_id
+    OSS_ACCESS_KEY_SECRET:
+      from_secret: oss_access_key_secret
+  when:
+    event:
+    - tag
+
+---
+kind: pipeline
+type: exec
+name: linux-arm64
+
+platform:
+  arch: arm64
+  os: linux
+
+steps:
+- name: publish
+  commands:
+  - CODENAME=bullseye ./build.sh all ${DRONE_TAG}
+  environment:
+    OSS_ENDPOINT:
+      from_secret: oss_endpoint
+    OSS_ACCESS_KEY_ID:
+      from_secret: oss_access_key_id
+    OSS_ACCESS_KEY_SECRET:
+      from_secret: oss_access_key_secret
+  when:
+    event:
+    - tag

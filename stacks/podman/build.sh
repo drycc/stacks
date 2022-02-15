@@ -62,8 +62,6 @@ EOF
 
   mv /opt/drycc/podman/bin/podman /opt/drycc/podman/bin/podman-original
   cat << EOF > "/opt/drycc/podman/bin/podman"
-#!/bin/bash
-
 if [ ! -d "/opt/cni" ];then
   ln -s /opt/drycc/podman/opt/cni /opt/cni
 fi
@@ -71,14 +69,17 @@ fi
 if [ ! -d "/etc/containers" ];then
   ln -s /opt/drycc/podman/etc/containers /etc/containers
 fi
-
 exec /opt/drycc/podman/bin/podman-original --runtime /opt/drycc/podman/bin/crun "\$@"
 EOF
   chmod +x /opt/drycc/podman/bin/podman
+  mkdir -p /opt/drycc/podman/profile.d
   mkdir -p /opt/drycc/podman/etc/containers
   mkdir -p /opt/drycc/podman/run/containers/storage
   mkdir -p /opt/drycc/podman/var/lib/containers/storage
   mkdir -p /opt/drycc/podman/var/lib/shared
+  cat << EOF > "/opt/drycc/podman/profile.d/podman.sh"
+export PATH="/opt/drycc/podman/bin:\$PATH"
+EOF
   cat << EOF > "/opt/drycc/podman/etc/containers/storage.conf"
 [storage]
 driver = "overlay"

@@ -17,6 +17,12 @@ EOF
   cp "${TARNAME}"/data/rabbitmq/plugins/rabbitmq_management-*/priv/www/cli/rabbitmqadmin "${TARNAME}"/data/rabbitmq/sbin
   chmod +x "${TARNAME}"/data/rabbitmq/sbin/rabbitmqadmin
   rm -rf tmp.tar
+
+  mkdir "${TARNAME}"/data/rabbitmq/profile.d
+  cat << EOF > "${TARNAME}"/data/rabbitmq/profile.d/rabbitmq.sh
+  export PATH="/opt/drycc/rabbitmq/sbin:\$PATH"
+EOF
+
 }
 
 # call build stack

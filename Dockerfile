@@ -45,3 +45,6 @@ RUN install-packages \
         python3-pip \
         default-libmysqlclient-dev; \
     pip install oss2
+
+ADD ruby.sh /etc/profile.d/ruby.sh
+ENV ENV /etc/profile.d/*

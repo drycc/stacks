@@ -11,12 +11,11 @@ libodbc1
 libsctp1
 libwxgtk3.0
 EOF
-  export PATH="/opt/drycc/erlang/bin:$PATH"
-  export C_INCLUDE_PATH="/opt/drycc/erlang/include"
-  export CPLUS_INCLUDE_PATH="/opt/drycc/erlang/include"
-  export LIBRARY_PATH="/opt/drycc/erlang/lib"
-  export LD_LIBRARY_PATH="/opt/drycc/erlang/lib"
-  export PKG_CONFIG_PATH="/opt/drycc/erlang/lib/pkg-config"
+  mkdir -p /opt/drycc/erlang/profile.d
+  cat  << EOF > /opt/drycc/erlang/profile.d/erlang.sh
+export PATH="/opt/drycc/erlang/bin:\$PATH"
+EOF
+  . /opt/drycc/erlang/profile.d/erlang.sh
   ./make.sh
   cp -rf /opt/drycc/erlang /workspace/"${TARNAME}"/data
 }

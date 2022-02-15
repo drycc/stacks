@@ -9,6 +9,10 @@ function build() {
   tar -xvzf tmp.tar.gz
   mv grafana-${STACK_VERSION} ${TARNAME}/data/grafana
   rm tmp.tar.gz
+  mkdir ${TARNAME}/data/grafana/profile.d
+  cat  << EOF > ${TARNAME}/data/grafana/profile.d/grafana.sh
+export PATH="/opt/drycc/grafana/bin:\$PATH"
+EOF
 }
 
 # call build stack

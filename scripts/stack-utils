@@ -1,6 +1,5 @@
 #!/bin/bash
 set -e
-set -u
 
 shopt -s expand_aliases
 alias gzip="gzip -n -9"

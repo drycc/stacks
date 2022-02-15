@@ -11,12 +11,16 @@ libffi-dev
 pkg-config
 libsqlite3-dev
 EOF
-  export PATH="/opt/drycc/python/bin:$PATH"
-  export C_INCLUDE_PATH="/opt/drycc/python/include"
-  export CPLUS_INCLUDE_PATH="/opt/drycc/python/include"
-  export LIBRARY_PATH="/opt/drycc/python/lib"
-  export LD_LIBRARY_PATH="/opt/drycc/python/lib"
-  export PKG_CONFIG_PATH="/opt/drycc/python/lib/pkg-config"
+  mkdir /opt/drycc/python/profile.d
+  cat << EOF > /opt/drycc/python/profile.d/python.sh
+  export PATH="/opt/drycc/python/bin:\$PATH"
+  export C_INCLUDE_PATH="/opt/drycc/python/include:\$C_INCLUDE_PATH"
+  export CPLUS_INCLUDE_PATH="/opt/drycc/python/include:\$CPLUS_INCLUDE_PATH"
+  export LIBRARY_PATH="/opt/drycc/python/lib:\$LIBRARY_PATH"
+  export LD_LIBRARY_PATH="/opt/drycc/python/lib:\$LD_LIBRARY_PATH"
+  export PKG_CONFIG_PATH="/opt/drycc/python/lib/pkg-config:\$PKG_CONFIG_PATH"
+EOF
+  . /opt/drycc/python/profile.d/python.sh
   ./make.sh
   cp -rf /opt/drycc/python /workspace/"${TARNAME}"/data
 }

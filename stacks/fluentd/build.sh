@@ -5,7 +5,6 @@
 
 # Implement build function
 function build() {
-  export STACK_DOWNLOAD_URL="http://47.75.184.187:8000" 
   cat  << EOF > ${PROFILE_DIR}/${STACK_NAME}.sh
 export GEM_HOME=/opt/drycc/fluentd
 export BUNDLE_SILENCE_ROOT_WARNING=1

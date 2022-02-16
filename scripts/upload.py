@@ -20,7 +20,7 @@ def upload(filename, filepath):
 
 
 def upload_list(stack_name, dist_dir):
-    for root, _, files in os.walk(dist_dir):
+    for root, _, files in os.walk(os.path.join(dist_dir, stack_name)):
         for _filename in  files:
             if _filename.startswith(stack_name) and _filename.endswith(".tar.gz"):
                 filename = os.path.join("stacks", stack_name, _filename)

@@ -5,7 +5,8 @@
 
 # Implement build function
 function build() {
-  BIN_DIR="${TARNAME}/data/common/bin"
+  generate-stack-path
+  BIN_DIR="${DATA_DIR}"/bin
   mkdir -p "${BIN_DIR}"
   curl -fsSL -o "${BIN_DIR}"/"${STACK_NAME}" https://github.com/tianon/gosu/releases/download/"${STACK_VERSION}"/"${STACK_NAME}"-"${OS_ARCH}"
   chmod +x "${BIN_DIR}"/"${STACK_NAME}"

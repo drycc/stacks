@@ -5,7 +5,8 @@
 
 # Implement build function
 function build() {
-  BIN_DIR="${TARNAME}/data/common/bin"
+  generate-stack-path
+  BIN_DIR="${DATA_DIR}"/bin
   mkdir -p "${BIN_DIR}"
   curl -fsSL -o tmp.tar.gz https://github.com/bitnami/wait-for-port/releases/download/v${STACK_VERSION}/"${STACK_NAME}"-linux-"${OS_ARCH}".tar.gz
   tar -xvzf tmp.tar.gz

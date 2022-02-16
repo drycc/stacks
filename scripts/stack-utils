@@ -11,6 +11,9 @@ export OS_NAME="${OS_NAME:-linux}"
 export OS_ARCH=$(dpkg --print-architecture)
 export OS_FLAVOUR="${OS_FLAVOUR:-${ID}-${VERSION_ID}}"
 export TARNAME="${STACK_NAME}-${STACK_VERSION}-${OS_NAME}-${OS_ARCH}-${OS_FLAVOUR}"
+export DATA_DIR=/workspace/"${TARNAME}"/data
+export META_DIR=/workspace/"${TARNAME}"/meta
+export PROFILE_DIR=/workspace/"${TARNAME}"/data/profile.d
 
 _is_sourced() {
 	# https://unix.stackexchange.com/a/215279
@@ -20,8 +23,9 @@ _is_sourced() {
 }
 
 function generate-stack-template() {
-  mkdir -p /workspace/"${TARNAME}"/meta
-  mkdir -p /workspace/"${TARNAME}"/data
+  mkdir -p "${META_DIR}"
+  mkdir -p "${DATA_DIR}"
+  mkdir -p "${PROFILE_DIR}"
   touch /workspace/"${TARNAME}"/meta/dependencies
   touch /workspace/"${TARNAME}"/meta/preinstall
   touch /workspace/"${TARNAME}"/meta/postinstall
@@ -29,9 +33,20 @@ function generate-stack-template() {
 }
 
 function generate-stack-package() {
-  dist_dir="${1:? miss dist dir}"
+  dist_dir="${1:? miss dist dir}"/"${STACK_NAME}"
+  mkdir -p "${dist_dir}"
   tar --numeric-owner -czf "${dist_dir}"/${TARNAME}.tar.gz -C /workspace/"${TARNAME}" . --transform='s,^./,,'
   rm -rf /workspace/"${TARNAME}"
+}
+
+function generate-stack-path() {
+  cat  << EOF > ${PROFILE_DIR}/${STACK_NAME}.sh
+export PATH="/opt/drycc/${STACK_NAME}/bin:\$PATH"
+EOF
+}
+
+function source-stack-path() {
+  . "${PROFILE_DIR}"/"${STACK_NAME}".sh
 }
 
 function build-stack() {

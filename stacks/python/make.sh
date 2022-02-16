@@ -48,6 +48,7 @@ set -eux; \
 	; \
 	make install; \
 	cd /; \
+	cp -rf /usr/src/python/Include /opt/drycc/python/include; \
 	rm -rf /usr/src/python; \
 	\
 	find /opt/drycc/python -depth \

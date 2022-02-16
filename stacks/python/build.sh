@@ -5,13 +5,13 @@
 
 # Implement build function
 function build() {
-  cat << EOF > "${TARNAME}"/meta/dependencies
+  cat << EOF > "${META_DIR}"/dependencies
 expat
 libffi-dev
 pkg-config
 libsqlite3-dev
 EOF
-  mkdir /opt/drycc/python/profile.d
+  mkdir -p /opt/drycc/python/profile.d
   cat << EOF > /opt/drycc/python/profile.d/python.sh
   export PATH="/opt/drycc/python/bin:\$PATH"
   export C_INCLUDE_PATH="/opt/drycc/python/include:\$C_INCLUDE_PATH"
@@ -22,7 +22,7 @@ EOF
 EOF
   . /opt/drycc/python/profile.d/python.sh
   ./make.sh
-  cp -rf /opt/drycc/python /workspace/"${TARNAME}"/data
+  cp -rf /opt/drycc/python/* ${DATA_DIR}
 }
 
 # call build stack

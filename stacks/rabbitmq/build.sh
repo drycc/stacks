@@ -5,24 +5,19 @@
 
 # Implement build function
 function build() {
-  cat << EOF > "${TARNAME}"/meta/dependencies
-python3
+  generate-stack-path
+  cat  << EOF > ${PROFILE_DIR}/${STACK_NAME}.sh
+export PATH="/opt/drycc/${STACK_NAME}/sbin:\$PATH"
 EOF
-
+  
   install-packages xz-utils
   curl -fsSL -o tmp.tar.xz https://github.com/rabbitmq/rabbitmq-server/releases/download/v${STACK_VERSION}/rabbitmq-server-generic-unix-${STACK_VERSION}.tar.xz
   xz -d tmp.tar.xz
   tar -xvf tmp.tar
-  mv rabbitmq_server-3.9.13 "${TARNAME}"/data/rabbitmq
-  cp "${TARNAME}"/data/rabbitmq/plugins/rabbitmq_management-*/priv/www/cli/rabbitmqadmin "${TARNAME}"/data/rabbitmq/sbin
-  chmod +x "${TARNAME}"/data/rabbitmq/sbin/rabbitmqadmin
-  rm -rf tmp.tar
-
-  mkdir "${TARNAME}"/data/rabbitmq/profile.d
-  cat << EOF > "${TARNAME}"/data/rabbitmq/profile.d/rabbitmq.sh
-  export PATH="/opt/drycc/rabbitmq/sbin:\$PATH"
-EOF
-
+  cp -rf rabbitmq_server-3.9.13/* "${DATA_DIR}"
+  cp "${DATA_DIR}"/plugins/rabbitmq_management-*/priv/www/cli/rabbitmqadmin "${TARNAME}"/data/sbin
+  chmod +x "${DATA_DIR}"/sbin/rabbitmqadmin
+  rm -rf tmp.tar rabbitmq_server-3.9.13
 }
 
 # call build stack

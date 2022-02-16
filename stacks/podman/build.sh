@@ -5,6 +5,7 @@
 
 # Implement build function
 function build() {
+  generate-stack-path
   cat << EOF > "${TARNAME}"/meta/dependencies
 fuse-overlayfs
 iptables
@@ -35,7 +36,7 @@ EOF
     conmon \
     go-md2man \
     libapparmor-dev
-    
+  
   install-stack go 1.17.7
   export GOPATH=/opt/drycc/go
   export PATH=$GOPATH/bin:$PATH
@@ -72,14 +73,11 @@ fi
 exec /opt/drycc/podman/bin/podman-original --runtime /opt/drycc/podman/bin/crun "\$@"
 EOF
   chmod +x /opt/drycc/podman/bin/podman
-  mkdir -p /opt/drycc/podman/profile.d
   mkdir -p /opt/drycc/podman/etc/containers
   mkdir -p /opt/drycc/podman/run/containers/storage
   mkdir -p /opt/drycc/podman/var/lib/containers/storage
   mkdir -p /opt/drycc/podman/var/lib/shared
-  cat << EOF > "/opt/drycc/podman/profile.d/podman.sh"
-export PATH="/opt/drycc/podman/bin:\$PATH"
-EOF
+
   cat << EOF > "/opt/drycc/podman/etc/containers/storage.conf"
 [storage]
 driver = "overlay"
@@ -96,7 +94,7 @@ EOF
 
   curl -L -o /opt/drycc/podman/etc/containers/registries.conf https://src.fedoraproject.org/rpms/containers-common/raw/main/f/registries.conf
   curl -L -o /opt/drycc/podman/etc/containers/policy.json https://src.fedoraproject.org/rpms/containers-common/raw/main/f/default-policy.json
-  cp -rf /opt/drycc/podman "${TARNAME}"/data
+  cp -rf /opt/drycc/podman/* ${DATA_DIR}
 }
 
 # call build stack

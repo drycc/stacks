@@ -48,7 +48,7 @@ function upload {
 
 function all() {
   STACK_NAME=$(echo "${1}" | cut -d '@' -f 1)
-  STACK_VERSION=$(echo "${2}" | cut -d '@' -f 2)
+  STACK_VERSION=$(echo "${1}" | cut -d '@' -f 2)
 
   build "${STACK_NAME}" "${STACK_VERSION}"
   upload "${STACK_NAME}"

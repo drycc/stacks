@@ -10,9 +10,32 @@ function build() {
   PG_MAJOR=$(echo "${STACK_VERSION}"|cut -d"." -f1)
 
   cat << EOF > /workspace/"${TARNAME}"/meta/dependencies
-binutils \
-gdal-bin \
+binutils
+gdal-bin
 libproj-dev
+llvm-11-dev
+libllvm11
+libc6
+libc6-i386
+libssl1.1
+libgcc-s1
+lib32gcc-s1
+libgssapi-krb5-2
+libicu67
+libldap-2.4-2
+liblz4-1
+libpam0g
+libperl5.32
+libpq5
+libpython3.9
+libreadline8
+libstdc++6
+lib32stdc++6
+libtcl8.6
+libuuid1
+libxml2
+libxslt1.1
+zlib1g
 EOF
 
   install-packages \
@@ -75,7 +98,7 @@ EOF
   cat  << EOF > "${PROFILE_DIR}/${STACK_NAME}.sh"
 export PATH="/opt/drycc/postgresql/$PG_MAJOR/bin:\$PATH"
 EOF
-
+  rm postgresql-${STACK_VERSION}
   cp -rf /opt/drycc/postgresql/* "${DATA_DIR}"
 }
 

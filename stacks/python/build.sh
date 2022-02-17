@@ -5,12 +5,6 @@
 
 # Implement build function
 function build() {
-  cat << EOF > "${META_DIR}"/dependencies
-expat
-libffi-dev
-pkg-config
-libsqlite3-dev
-EOF
   mkdir -p /opt/drycc/python/profile.d
   cat << EOF > /opt/drycc/python/profile.d/python.sh
   export PATH="/opt/drycc/python/bin:\$PATH"

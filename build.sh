@@ -22,6 +22,7 @@ function build {
   stack_version="${2:?stack_version is required}"
   docker run --rm \
     --privileged=true \
+    --env STACK_DOWNLOAD_URL="${STACK_DOWNLOAD_URL:-}" \
     --env STACK_NAME="${STACK_NAME}" \
     --env STACK_VERSION="${stack_version}" \
     -v "${DIST_DIR}":"${DIST_DIR}" \

@@ -5,15 +5,6 @@
 
 # Implement build function
 function build() {
-  cat << EOF > "${META_DIR}"/dependencies
-libreadline8
-libxml2
-libsqlite3-0
-libsqlite3
-libargon2-1
-libonig5
-EOF
-
   mkdir -p /opt/drycc/php/profile.d
   cat << EOF > /opt/drycc/php/profile.d/php.sh
 export PATH=/opt/drycc/php/bin:/opt/drycc/php/sbin:$PATH

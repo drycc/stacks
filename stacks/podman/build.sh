@@ -10,8 +10,6 @@ function build() {
 fuse-overlayfs
 iptables
 conmon
-libgpgme11
-libdevmapper1.02.1
 EOF
 
   install-packages \

@@ -26,10 +26,10 @@ function generate-stack-template() {
   mkdir -p "${META_DIR}"
   mkdir -p "${DATA_DIR}"
   mkdir -p "${PROFILE_DIR}"
-  touch /workspace/"${TARNAME}"/meta/dependencies
-  touch /workspace/"${TARNAME}"/meta/preinstall
-  touch /workspace/"${TARNAME}"/meta/postinstall
-  chmod +x /workspace/"${TARNAME}"/meta/preinstall /workspace/"${TARNAME}"/meta/postinstall
+  touch "${META_DIR}"/dependencies
+  touch "${META_DIR}"/preinstall
+  touch "${META_DIR}"/postinstall
+  chmod +x "${META_DIR}"/preinstall "${META_DIR}"/postinstall
 }
 
 function generate-stack-package() {
@@ -45,6 +45,11 @@ export PATH="/opt/drycc/${STACK_NAME}/bin:\$PATH"
 EOF
 }
 
+function generate-stack-dependencies() {
+  scanelp "${DATA_DIR}" | awk -F ":" '{print $1}' >> ${META_DIR}/dependencies
+  cat ${META_DIR}/dependencies | awk '!x[$0]++' > ${META_DIR}/dependencies
+}
+
 function source-stack-path() {
   . "${PROFILE_DIR}"/"${STACK_NAME}".sh
 }
@@ -52,6 +57,7 @@ function source-stack-path() {
 function build-stack() {
   generate-stack-template
   build
+  generate-stack-dependencies
   generate-stack-package "$1"
 }
 

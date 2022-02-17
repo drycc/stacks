@@ -5,10 +5,6 @@
 
 # Implement build function
 function build() {
-  cat << EOF > /workspace/"${TARNAME}"/meta/dependencies
-libncurses6
-EOF
-
   install-packages \
   	cmake \
 

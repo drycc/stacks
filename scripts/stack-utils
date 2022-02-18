@@ -47,7 +47,7 @@ EOF
 
 function generate-stack-dependencies() {
   scanelp "${DATA_DIR}" | awk -F ":" '{print $1}' >> ${META_DIR}/dependencies
-  cat ${META_DIR}/dependencies | sort -u > ${META_DIR}/dependencies
+  sort ${META_DIR}/dependencies -u -o ${META_DIR}/dependencies
 }
 
 function source-stack-path() {

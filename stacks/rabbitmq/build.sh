@@ -14,13 +14,12 @@ EOF
   curl -fsSL -o tmp.tar.xz https://github.com/rabbitmq/rabbitmq-server/releases/download/v${STACK_VERSION}/rabbitmq-server-generic-unix-${STACK_VERSION}.tar.xz
   xz -d tmp.tar.xz
   tar -xvf tmp.tar
-  cp -rf rabbitmq_server-3.9.13/* "${DATA_DIR}"
+  cp -rf rabbitmq_server-${STACK_VERSION}/* "${DATA_DIR}"
   cp "${DATA_DIR}"/plugins/rabbitmq_management-*/priv/www/cli/rabbitmqadmin "${TARNAME}"/data/sbin
   chmod +x "${DATA_DIR}"/sbin/rabbitmqadmin
-  rm -rf tmp.tar rabbitmq_server-3.9.13
+  rm -rf tmp.tar rabbitmq_server-${STACK_VERSION}
 }
 
 # call build stack
 build-stack "${1}"
-
 

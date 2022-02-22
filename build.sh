@@ -47,6 +47,13 @@ function upload {
     python3 /scripts/upload.py "${STACK_NAME}" "${DIST_DIR}"
 }
 
+function renew() {
+  git tag -d "$1"
+  git push origin :refs/tags/"$1"
+  git tag "$1"
+  git push --tag
+}
+
 function all() {
   STACK_NAME=$(echo "${1}" | cut -d '@' -f 1)
   STACK_VERSION=$(echo "${1}" | cut -d '@' -f 2)

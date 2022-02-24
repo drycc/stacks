@@ -13,13 +13,17 @@ DIST_DIR="${CURRENT_DIR}"/_dist
 CODENAME="${CODENAME:?codename is required}"
 # buildpack-dep image name
 BUILDPACK_DEP_IMAGE="${DRYCC_REGISTRY}"/drycc/buildpack-dep:"${CODENAME}"
-# build buildpack-dep image
-docker build --pull -f "${CURRENT_DIR}"/Dockerfile --build-arg CODENAME="${CODENAME}" --build-arg DRYCC_REGISTRY="${DRYCC_REGISTRY}" . -t "${BUILDPACK_DEP_IMAGE}"
+
+function create-buildpack-dep {
+  # build buildpack-dep image
+  docker build --pull -f "${CURRENT_DIR}"/Dockerfile --build-arg CODENAME="${CODENAME}" --build-arg DRYCC_REGISTRY="${DRYCC_REGISTRY}" . -t "${BUILDPACK_DEP_IMAGE}"
+}
 
 function build {
   mkdir -p "$DIST_DIR"
   STACK_NAME="${1:?STACK_NAME is required}"
   stack_version="${2:?stack_version is required}"
+  create-buildpack-dep
   docker run --rm \
     --privileged=true \
     --env STACK_DOWNLOAD_URL="${STACK_DOWNLOAD_URL:-}" \
@@ -35,6 +39,7 @@ function build {
 
 function upload {
   STACK_NAME="${1:?stack_name is required}"
+  create-buildpack-dep
   docker run --rm \
     --env OSS_ENDPOINT=${OSS_ENDPOINT} \
     --env OSS_ACCESS_KEY_ID=${OSS_ACCESS_KEY_ID} \

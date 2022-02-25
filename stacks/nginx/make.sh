@@ -7,6 +7,7 @@ cd nginx-${STACK_VERSION}
   --prefix=/opt/drycc/nginx \
   --with-threads \
   --with-file-aio \
+  --with-http_realip_module \
   --with-http_ssl_module \
   --with-http_v2_module \
   --with-pcre-jit

@@ -49,8 +49,22 @@ function upload {
     -v "${CURRENT_DIR}/scripts:/scripts" \
     -w /workspace \
     "${BUILDPACK_DEP_IMAGE}" \
-    python3 /scripts/upload.py "${STACK_NAME}" "${DIST_DIR}"
+    python3 /scripts/storage.py upload "${STACK_NAME}" "${DIST_DIR}"
 }
+
+function symlink {
+  docker run --rm \
+    --env OSS_ENDPOINT=${OSS_ENDPOINT} \
+    --env OSS_ACCESS_KEY_ID=${OSS_ACCESS_KEY_ID} \
+    --env OSS_ACCESS_KEY_SECRET=${OSS_ACCESS_KEY_SECRET} \
+    -v "${DIST_DIR}":"${DIST_DIR}" \
+    -v "${CURRENT_DIR}/stacks:/workspace" \
+    -v "${CURRENT_DIR}/scripts:/scripts" \
+    -w /workspace \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 /scripts/storage.py symlink "${1}" "${2}"
+}
+
 
 function renew() {
   git tag -d "$1"

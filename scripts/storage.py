@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import oss2
 
@@ -26,8 +27,28 @@ def upload_list(stack_name, dist_dir):
                 filename = os.path.join("stacks", stack_name, _filename)
                 filepath = os.path.join(root, _filename)
                 upload(filename, filepath)
-        
+
+
+def symlink(stack_name, version):
+    symlink_list = []
+    object_list = [
+        obj.key for obj in bucket.list_objects(
+            f"stacks/{stack_name}/{stack_name}-{version}.").object_list
+    ]
+    object_list.sort(reverse=True)
+    for obj in object_list:
+        name = f"stacks/{stack_name}/{stack_name}-{version}"
+        symlink = re.sub("%s.[0-9]{1,}" % name, name, obj)
+        if symlink != obj and symlink not in symlink_list:
+            bucket.put_symlink(obj, symlink)
+            symlink_list.append(symlink)
 
 
 if __name__ == "__main__":
-    upload_list(sys.argv[1], sys.argv[2])
+    action = sys.argv[1]
+    if action == "upload":
+        upload_list(sys.argv[2], sys.argv[3])
+    elif action == "symlink":
+        symlink(sys.argv[2], sys.argv[3])
+    else:
+        print("Unknown action: %s" % action)

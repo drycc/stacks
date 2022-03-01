@@ -98,9 +98,10 @@ EOF
   cat  << EOF > "${PROFILE_DIR}/${STACK_NAME}.sh"
 export PATH="/opt/drycc/postgresql/$PG_MAJOR/bin:\$PATH"
 EOF
-  rm postgresql-${STACK_VERSION}
   cp -rf /opt/drycc/postgresql/* "${DATA_DIR}"
+  cd ../ && rm "postgresql-${STACK_VERSION}" -rf
 }
 
 # call build stack
 build-stack "${1}"
+

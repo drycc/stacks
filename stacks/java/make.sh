@@ -1,4 +1,11 @@
-set -eux
+set -eux;
+
+function clean_before_exit {
+    rm -rf /workspace/jdk-jdk-*-* /workspace/java.tar.gz
+    sleep 3
+}
+trap clean_before_exit EXIT
+
 tag=$(echo "${STACK_VERSION}" | awk -F "." '{print "jdk-"$1"+"$2}')
 curl -fsSL -o java.tar.gz https://github.com/openjdk/jdk/archive/refs/tags/${tag}.tar.gz
 tar -xvzf java.tar.gz
@@ -13,18 +20,21 @@ install-packages \
   libcups2-dev \
   libfontconfig1-dev \
   libasound2-dev \
-  zip
+  zip \
+  clang
 
-apt-get update -yq
 main_version=$(echo "${STACK_VERSION}" | awk -F "." '{print $1}')
 version_build=$(echo "${STACK_VERSION}" | awk -F "." '{print $2}')
-if [ -z "$(apt-cache search openjdk-${main_version}-jdk)" ]; then
+
+apt-get update -yq
+if [[ -n "$(apt-cache search openjdk-${main_version}-jdk)" ]]; then
   install-packages openjdk-${main_version}-jdk
 else
   install-packages openjdk-17-jdk
 fi
 
 bash configure \
+  --with-toolchain-type=clang \
   --with-jvm-variants=server \
   --enable-unlimited-crypto \
   --with-version-build="${version_build}" \
@@ -35,4 +45,3 @@ bash configure \
   --disable-warnings-as-errors
 make
 cp -rf build/linux-*-server-release/jdk/* "${DATA_DIR}"
-rm -rf /workspace/jdk-jdk-*-* java.tar.gz

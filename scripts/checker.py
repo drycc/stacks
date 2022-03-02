@@ -133,12 +133,6 @@ repo_info_table = {
         "owner": "containers",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "postgis": {
-        "name": "postgis",
-        "type": "github",
-        "owner": "postgis",
-        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "postgresql": {
         "name": "postgres",
         "type": "github",

@@ -4,7 +4,6 @@ curl -fsSL -o java.tar.gz https://github.com/openjdk/jdk/archive/refs/tags/${tag
 tar -xvzf java.tar.gz
 cd jdk-jdk-*-*
 install-packages \
-  openjdk-17-jdk \
   libx11-dev \
   libxext-dev \
   libxrender-dev \
@@ -16,7 +15,13 @@ install-packages \
   libasound2-dev \
   zip
 
+main_version=$(echo "${STACK_VERSION}" | awk -F "." '{print $1}')
 version_build=$(echo "${STACK_VERSION}" | awk -F "." '{print $2}')
+if [ -z "$(apt-cache search openjdk-${main_version}-jdk)" ]; then
+  install-packages openjdk-${main_version}-jdk
+else
+  install-packages openjdk-17-jdk
+fi
 
 bash configure \
   --with-jvm-variants=server \

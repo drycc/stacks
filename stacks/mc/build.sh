@@ -8,7 +8,8 @@ function build() {
   generate-stack-path
   BIN_DIR="${DATA_DIR}"/bin
   mkdir -p "${BIN_DIR}"
-  curl -fsSL -o "${BIN_DIR}"/"${STACK_NAME}" https://dl.min.io/client/mc/release/linux-${OS_ARCH}/mc.${STACK_VERSION}
+  version=$(echo ${STACK_VERSION} | awk -F "." '{print "RELEASE."$1"-"$2"-"$3"T"$4"-"$5"-"$6"Z"}')
+  curl -fsSL -o "${BIN_DIR}"/"${STACK_NAME}" https://dl.min.io/client/mc/release/linux-${OS_ARCH}/mc.${version}
   chmod +x "${BIN_DIR}"/"${STACK_NAME}"
 }
 

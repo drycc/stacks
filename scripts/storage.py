@@ -13,6 +13,16 @@ bucket = oss2.Bucket(
     'drycc'
 )
 
+symlink_table = {
+    "go": ["1.16", "1.17", "1.18"],
+    "java": ["8", "11", "17", "18", "19"],
+    "node": ["12", "14", "16"],
+    "php": ["7.3", "7.4", "8.0", "8.1"],
+    "python": ["2.7", "3.7", "3.8", "3.9", "3.10"],
+    "ruby": ["2.6", "3.7", "3.0", "3.1"],
+    "rust": ["1"],
+}
+
 
 def upload(filename, filepath):
     with open(filepath, "rb") as f:
@@ -27,6 +37,11 @@ def upload_list(stack_name, dist_dir):
                 filename = os.path.join("stacks", stack_name, _filename)
                 filepath = os.path.join(root, _filename)
                 upload(filename, filepath)
+                if stack_name in symlink_table:
+                    for symlink_version in symlink_table[stack_name]:
+                        prefix = f"stacks/{stack_name}/{stack_name}-{symlink_version}"
+                        if filename.startswith(prefix):
+                            symlink(stack_name, symlink_version)
 
 
 def symlink(stack_name, version):
@@ -38,7 +53,7 @@ def symlink(stack_name, version):
     object_list.sort(reverse=True)
     for obj in object_list:
         name = f"stacks/{stack_name}/{stack_name}-{version}"
-        symlink = re.sub("%s.[0-9]{1,}" % name, name, obj)
+        symlink = re.sub("%s.([0-9]\.?){1,}" % name, name, obj)
         if symlink != obj and symlink not in symlink_list:
             bucket.put_symlink(obj, symlink)
             symlink_list.append(symlink)

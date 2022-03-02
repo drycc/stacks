@@ -16,7 +16,7 @@ function build() {
     *) echo >&2 "error: unsupported architecture: '$arch'"; exit 1 ;;
   esac;
   curl -fsSL -o rust.tar.gz "${downloadUrl}"
-  tar -xvzf rust.tar.gz
+  tar -xzf rust.tar.gz
   cd rust-${STACK_VERSION}-*-unknown-linux-gnu
   ./install.sh --prefix=/opt/drycc/rust
   rm -rf /opt/drycc/rust/share /opt/drycc/rust/bin/rustdoc

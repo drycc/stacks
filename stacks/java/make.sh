@@ -8,7 +8,7 @@ trap clean_before_exit EXIT
 
 tag=$(echo "${STACK_VERSION}" | awk -F "." '{print "jdk-"$1"+"$2}')
 curl -fsSL -o java.tar.gz https://github.com/openjdk/jdk/archive/refs/tags/${tag}.tar.gz
-tar -xvzf java.tar.gz
+tar -xzf java.tar.gz
 cd jdk-jdk-*-*
 install-packages \
   libx11-dev \

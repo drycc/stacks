@@ -1,7 +1,7 @@
 #!/bin/bash
 
 curl -fsSL -o nginx.tar.gz http://nginx.org/download/nginx-${STACK_VERSION}.tar.gz
-tar -xvzf nginx.tar.gz
+tar -xzf nginx.tar.gz
 cd nginx-${STACK_VERSION}
 ./configure \
   --prefix=/opt/drycc/nginx \

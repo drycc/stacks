@@ -14,7 +14,7 @@ set -eux; \
 	wget -O ruby.tar.gz "https://github.com/ruby/ruby/archive/refs/tags/v${STACK_VERSION//./_}.tar.gz"; \
 	\
 	mkdir -p /usr/src/ruby; \
-	tar -xvzf ruby.tar.gz -C /usr/src/ruby --strip-components=1; \
+	tar -xzf ruby.tar.gz -C /usr/src/ruby --strip-components=1; \
 	rm ruby.tar.gz; \
 	\
 	cd /usr/src/ruby; \

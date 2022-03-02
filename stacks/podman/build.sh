@@ -40,7 +40,7 @@ EOF
   export PATH=$GOPATH/bin:$PATH
 
   curl -fsSL -o tmp.tar.gz https://github.com/containers/podman/archive/refs/tags/v${STACK_VERSION}.tar.gz
-  tar -xvzf tmp.tar.gz && rm tmp.tar.gz
+  tar -xzf tmp.tar.gz && rm tmp.tar.gz
   cd podman-${STACK_VERSION}
   PREFIX=/opt/drycc/podman make BUILDTAGS="seccomp"
   PREFIX=/opt/drycc/podman make install
@@ -55,7 +55,7 @@ EOF
   mkdir -p /opt/drycc/podman/opt/cni/bin
   cd /opt/drycc/podman/opt/cni/bin
   curl -fsSL -o tmp.tar.gz https://github.com/containernetworking/plugins/releases/download/v${cni_version}/cni-plugins-linux-${OS_ARCH}-v${cni_version}.tgz
-  tar -xvzf tmp.tar.gz
+  tar -xzf tmp.tar.gz
   rm tmp.tar.gz
   cd -
 

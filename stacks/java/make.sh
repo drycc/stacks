@@ -15,6 +15,7 @@ install-packages \
   libasound2-dev \
   zip
 
+apt-get update -yq
 main_version=$(echo "${STACK_VERSION}" | awk -F "." '{print $1}')
 version_build=$(echo "${STACK_VERSION}" | awk -F "." '{print $2}')
 if [ -z "$(apt-cache search openjdk-${main_version}-jdk)" ]; then

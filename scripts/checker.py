@@ -59,7 +59,7 @@ repo_info_table = {
         "name": "influxdb",
         "type": "github",
         "owner": "influxdata",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+        "match": "^v[2-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "ini-file": {
         "name": "ini-file",
@@ -83,7 +83,7 @@ repo_info_table = {
         "name": "kubectl",
         "type": "github",
         "owner": "kubernetes",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+        "match": "^kubernetes-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "mariadb": {
         "name": "server",

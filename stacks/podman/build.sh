@@ -10,6 +10,8 @@ function build() {
 fuse-overlayfs
 iptables
 conmon
+uidmap
+slirp4netns
 EOF
 
   install-packages \
@@ -42,6 +44,10 @@ EOF
   curl -fsSL -o tmp.tar.gz https://github.com/containers/podman/archive/refs/tags/v${STACK_VERSION}.tar.gz
   tar -xzf tmp.tar.gz && rm tmp.tar.gz
   cd podman-${STACK_VERSION}
+  
+
+  sed -i "s#/etc/containers#/opt/drycc/podman/etc/containers#g" `grep /etc/containers -rl .`
+
   PREFIX=/opt/drycc/podman make BUILDTAGS="seccomp"
   PREFIX=/opt/drycc/podman make install
   cd /workspace
@@ -59,22 +65,12 @@ EOF
   rm tmp.tar.gz
   cd -
 
-  mv /opt/drycc/podman/bin/podman /opt/drycc/podman/bin/podman-original
-  cat << EOF > "/opt/drycc/podman/bin/podman"
-if [ ! -d "/opt/cni" ];then
-  ln -s /opt/drycc/podman/opt/cni /opt/cni
-fi
-
-if [ ! -d "/etc/containers" ];then
-  ln -s /opt/drycc/podman/etc/containers /etc/containers
-fi
-exec /opt/drycc/podman/bin/podman-original --runtime /opt/drycc/podman/bin/crun "\$@"
-EOF
   chmod +x /opt/drycc/podman/bin/podman
   mkdir -p /opt/drycc/podman/etc/containers
   mkdir -p /opt/drycc/podman/run/containers/storage
   mkdir -p /opt/drycc/podman/var/lib/containers/storage
   mkdir -p /opt/drycc/podman/var/lib/shared
+  mkdir -p /opt/drycc/podman/etc/cni/net.d
 
   cat << EOF > "/opt/drycc/podman/etc/containers/storage.conf"
 [storage]
@@ -86,8 +82,22 @@ additionalimagestores = [
 "/opt/drycc/podman/var/lib/shared",
 ]
 [storage.options.overlay]
+ignore_chown_errors = "true"
 mount_program = "/usr/bin/fuse-overlayfs"
 mountopt = "nodev,fsync=0"
+EOF
+
+  cat << EOF > "/opt/drycc/podman/etc/containers/containers.conf"
+[containers]
+netns="private"
+
+[network]
+cni_plugin_dir="/opt/drycc/podman/opt/cni"
+network_config_dir="/opt/drycc/podman/etc/cni/net.d/"
+default_network="podman"
+
+[engine]
+runtime="/opt/drycc/podman/bin/crun"
 EOF
 
   curl -L -o /opt/drycc/podman/etc/containers/registries.conf https://src.fedoraproject.org/rpms/containers-common/raw/main/f/registries.conf

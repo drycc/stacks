@@ -237,6 +237,8 @@ def create_github_issue(stack, tag_name):
         f"https://api.github.com/repos/drycc/stacks/git/ref/tags/{stack}@{version}",
         headers=github_headers,
     ).status_code == 404:
+        print(stack, version)
+        return
         create_github_tag(stack, f"{stack}@{version}")
         link = f"https://github.com/search?q=org%3Adrycc+install-stack+{stack}&type=code"
         requests.post(

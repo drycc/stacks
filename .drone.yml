@@ -7,6 +7,21 @@ platform:
   os: linux
 
 steps:
+- name: check
+  commands:
+  - docker run --rm
+      -e GITHUB_TOKEN=$GITHUB_TOKEN
+      -v "$(pwd):$(pwd)"
+      -w "$(pwd)"
+      drycc/python-dev
+      python scripts/checker.py
+  environment:
+    GITHUB_TOKEN:
+      from_secret: github_token
+  when:
+    event:
+    - cron
+
 - name: publish
   commands:
   - CODENAME=bullseye ./build.sh all ${DRONE_TAG}

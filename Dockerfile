@@ -2,7 +2,22 @@ ARG CODENAME DRYCC_REGISTRY
 FROM ${DRYCC_REGISTRY}/drycc/base:${CODENAME}
 
 RUN install-packages \
-        autoconf \
+        ca-certificates \
+		curl \
+		netbase \
+		wget \
+		gnupg \
+		dirmngr
+
+RUN install-packages \
+		git \
+		mercurial \
+		openssh-client \
+		subversion \
+		procps
+
+RUN install-packages \
+		autoconf \
 		automake \
 		bzip2 \
 		dpkg-dev \

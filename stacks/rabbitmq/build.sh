@@ -9,7 +9,7 @@ function build() {
   cat  << EOF > ${PROFILE_DIR}/${STACK_NAME}.sh
 export PATH="/opt/drycc/${STACK_NAME}/sbin:\$PATH"
 EOF
-  
+  echo "procps" > ${META_DIR}/dependencies
   install-packages xz-utils
   curl -fsSL -o tmp.tar.xz https://github.com/rabbitmq/rabbitmq-server/releases/download/v${STACK_VERSION}/rabbitmq-server-generic-unix-${STACK_VERSION}.tar.xz
   xz -d tmp.tar.xz

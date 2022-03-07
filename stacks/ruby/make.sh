@@ -1,3 +1,6 @@
+
+RUBY_MAJOR=$(echo $STACK_VERSION | awk -F "." '{print $1"."$2}')
+
 set -eux; \
 	\
 	savedAptMark="$(apt-mark showmanual)"; \
@@ -11,7 +14,7 @@ set -eux; \
 	; \
 	rm -rf /var/lib/apt/lists/*; \
 	\
-	wget -O ruby.tar.gz "https://github.com/ruby/ruby/archive/refs/tags/v${STACK_VERSION//./_}.tar.gz"; \
+	wget -O ruby.tar.gz https://cache.ruby-lang.org/pub/ruby/${RUBY_MAJOR}/ruby-${STACK_VERSION}.tar.gz; \
 	\
 	mkdir -p /usr/src/ruby; \
 	tar -xzf ruby.tar.gz -C /usr/src/ruby --strip-components=1; \

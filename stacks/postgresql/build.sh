@@ -84,6 +84,7 @@ function build() {
 
   cat  << EOF > "${PROFILE_DIR}/${STACK_NAME}.sh"
 export PATH="/opt/drycc/postgresql/$PG_MAJOR/bin:\$PATH"
+export LD_LIBRARY_PATH="/opt/drycc/postgresql/$PG_MAJOR/lib:\$LD_LIBRARY_PATH"
 EOF
   cp -rf /opt/drycc/postgresql/* "${DATA_DIR}"
   cd /workspace && rm "postgresql-${PG_VER}" -rf

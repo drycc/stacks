@@ -9,7 +9,7 @@ function build() {
   BIN_DIR="${DATA_DIR}"/bin
   mkdir -p "${BIN_DIR}"
   version=$(echo ${STACK_VERSION} | awk -F "." '{print "RELEASE."$1"-"$2"-"$3"T"$4"-"$5"-"$6"Z"}')
-  curl -fsSL -o "${BIN_DIR}"/"${STACK_NAME}" https://dl.min.io/server/minio/release/linux-${OS_ARCH}/minio.${version}
+  curl -fsSL -o "${BIN_DIR}"/"${STACK_NAME}" https://dl.min.io/server/minio/release/linux-${OS_ARCH}/archive/minio.${version}
   chmod +x "${BIN_DIR}"/"${STACK_NAME}"
 }
 

@@ -33,6 +33,9 @@ else
   install-packages openjdk-17-jdk
 fi
 
+# To enable core dumping
+ulimit -c unlimited
+
 bash configure \
   --with-toolchain-type=clang \
   --with-jvm-variants=server \
@@ -41,7 +44,7 @@ bash configure \
   --with-version-pre="drycc" \
   --with-version-opt="" \
   --with-vendor-version-string="$(date '+%Y%m%d%H%M%S')" \
-  -with-native-debug-symbols=external \
+  --with-native-debug-symbols=external \
   --disable-warnings-as-errors
 make
 cp -rf build/linux-*-server-release/jdk/* "${DATA_DIR}"

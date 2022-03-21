@@ -20,8 +20,7 @@ install-packages \
   libcups2-dev \
   libfontconfig1-dev \
   libasound2-dev \
-  zip \
-  clang
+  zip
 
 main_version=$(echo "${STACK_VERSION}" | awk -F "." '{print $1}')
 version_build=$(echo "${STACK_VERSION}" | awk -F "." '{print $2}')
@@ -37,7 +36,6 @@ fi
 ulimit -c unlimited
 
 bash configure \
-  --with-toolchain-type=clang \
   --with-jvm-variants=server \
   --enable-unlimited-crypto \
   --with-version-build="${version_build}" \

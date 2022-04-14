@@ -9,6 +9,7 @@ platform:
 steps:
 - name: check
   commands:
+  - mkdir -p $HOMEPATH/.docker; echo $IMAGE_PULL_SECRETS > $HOMEPATH/.docker/config.json
   - docker run --rm
       -e GITHUB_TOKEN=$GITHUB_TOKEN
       -v "$(pwd):$(pwd)"
@@ -18,12 +19,19 @@ steps:
   environment:
     GITHUB_TOKEN:
       from_secret: github_token
+    DEV_REGISTRY:
+      from_secret: dev_registry
+    DRYCC_REGISTRY:
+      from_secret: drycc_registry
+    IMAGE_PULL_SECRETS:
+      from_secret: container_pull_secrets
   when:
     event:
     - cron
 
 - name: publish
   commands:
+  - mkdir -p $HOMEPATH/.docker; echo $IMAGE_PULL_SECRETS > $HOMEPATH/.docker/config.json
   - CODENAME=bullseye ./build.sh all ${DRONE_TAG}
   environment:
     OSS_ENDPOINT:
@@ -32,6 +40,8 @@ steps:
       from_secret: oss_access_key_id
     OSS_ACCESS_KEY_SECRET:
       from_secret: oss_access_key_secret
+    IMAGE_PULL_SECRETS:
+      from_secret: container_pull_secrets
   when:
     event:
     - tag
@@ -48,6 +58,7 @@ platform:
 steps:
 - name: publish
   commands:
+  - mkdir -p $HOMEPATH/.docker; echo $IMAGE_PULL_SECRETS > $HOMEPATH/.docker/config.json
   - CODENAME=bullseye ./build.sh all ${DRONE_TAG}
   environment:
     OSS_ENDPOINT:
@@ -56,6 +67,8 @@ steps:
       from_secret: oss_access_key_id
     OSS_ACCESS_KEY_SECRET:
       from_secret: oss_access_key_secret
+    IMAGE_PULL_SECRETS:
+      from_secret: container_pull_secrets
   when:
     event:
     - tag

@@ -2,7 +2,7 @@
 set -e
 set -u
 # Build a base image
-DRYCC_REGISTRY=${DRYCC_REGISTRY:-${DEV_REGISTRY:-docker.io}}
+DRYCC_REGISTRY=${DRYCC_REGISTRY:-${DEV_REGISTRY:-registry.drycc.cc}}
 
 # make sure we are in this dir
 CURRENT_DIR=$(cd "$(dirname "$0")"; pwd)

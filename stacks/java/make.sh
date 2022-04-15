@@ -29,7 +29,7 @@ apt-get update -yq
 if [[ -n "$(apt-cache search openjdk-${main_version}-jdk)" ]]; then
   install-packages openjdk-${main_version}-jdk
 else
-  install-packages openjdk-17-jdk
+  LD_LIBRARY_PATH=''; install-stack java $[main_version-1] ; . init-stack|| install-packages openjdk-17-jdk
 fi
 
 # To enable core dumping

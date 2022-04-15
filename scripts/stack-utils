@@ -56,7 +56,7 @@ function source-stack-path() {
 
 function build-stack() {
   generate-stack-template
-  build
+  build || exit 1
   generate-stack-dependencies
   generate-stack-package "$1"
 }

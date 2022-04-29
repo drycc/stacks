@@ -7,6 +7,24 @@ from datetime import datetime
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
 
 repo_info_table = {
+    "redis_exporter": {
+        "name": "redis_exporter",
+        "type": "github",
+        "owner": "oliver006",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "mysqld_exporter": {
+        "name": "mysqld_exporter",
+        "type": "github",
+        "owner": "prometheus",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "postgres_exporter": {
+        "name": "postgres_exporter",
+        "type": "github",
+        "owner": "prometheus-community",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "caddy": {
         "name": "caddy",
         "type": "github",

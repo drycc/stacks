@@ -8,7 +8,7 @@ function build() {
   echo "libpcre3-dev" > ${META_DIR}/dependencies
   mkdir -p /opt/drycc/php/profile.d
   cat << EOF > /opt/drycc/php/profile.d/php.sh
-export PATH="/opt/drycc/php/bin:/opt/drycc/php/sbin:\$PATH"
+export PATH="/opt/drycc/php/bin:/opt/drycc/php/sbin:/opt/drycc/php/lib:\$PATH"
 export PHP_PEAR_PHP_BIN="/opt/drycc/php/bin/php"
 export PHP_PEAR_INSTALL_DIR="/opt/drycc/php/lib/php"
 export C_INCLUDE_PATH="/opt/drycc/php/include:\$C_INCLUDE_PATH"

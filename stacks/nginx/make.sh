@@ -10,7 +10,8 @@ cd nginx-${STACK_VERSION}
   --with-http_realip_module \
   --with-http_ssl_module \
   --with-http_v2_module \
-  --with-pcre-jit
+  --with-pcre-jit \
+  --with-http_auth_request_module
 make
 make install
 rm -rf /workspace/nginx.tar.gz /workspace/nginx-${STACK_VERSION}

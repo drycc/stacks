@@ -7,6 +7,12 @@ from datetime import datetime
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
 
 repo_info_table = {
+    "vouch-proxy": {
+        "name": "vouch-proxy",
+        "type": "github",
+        "owner": "vouch",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "redis_exporter": {
         "name": "redis_exporter",
         "type": "github",

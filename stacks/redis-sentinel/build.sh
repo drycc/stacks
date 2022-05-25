@@ -30,11 +30,11 @@ function build() {
   \
   export BUILD_TLS=yes; \
   make -C /usr/src/redis -j "$(nproc)" all; \
-  make -C /usr/src/redis PREFIX=/opt/drycc/redis install; \
+  make -C /usr/src/redis PREFIX=/opt/drycc/redis-sentinel install; \
   \
   # TODO https://github.com/redis/redis/pull/3494 (deduplicate "redis-server" copies)
-  serverMd5="$(md5sum /opt/drycc/redis/bin/redis-server | cut -d' ' -f1)"; export serverMd5; \
-  find /opt/drycc/redis/bin/redis* -maxdepth 0 \
+  serverMd5="$(md5sum /opt/drycc/redis-sentinel/bin/redis-server | cut -d' ' -f1)"; export serverMd5; \
+  find /opt/drycc/redis-sentinel/bin/redis* -maxdepth 0 \
     -type f -not -name redis-server \
     -exec sh -eux -c ' \
       md5="$(md5sum "$1" | cut -d" " -f1)"; \
@@ -47,7 +47,7 @@ function build() {
   \
   apt-mark auto '.*' > /dev/null; \
   [ -z "$savedAptMark" ] || apt-mark manual $savedAptMark > /dev/null; \
-  find /opt/drycc/redis/bin -type f -executable -exec ldd '{}' ';' \
+  find /opt/drycc/redis-sentinel/bin -type f -executable -exec ldd '{}' ';' \
     | awk '/=>/ { print $(NF-1) }' \
     | sort -u \
     | xargs -r dpkg-query --search \
@@ -57,18 +57,18 @@ function build() {
   ; \
   apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
   \
-  /opt/drycc/redis/bin/redis-cli --version; \
-  /opt/drycc/redis/bin/redis-server --version
+  /opt/drycc/redis-sentinel/bin/redis-cli --version; \
+  /opt/drycc/redis-sentinel/bin/redis-server --version
 
-  chmod +x /opt/drycc/redis/bin/redis*
+  chmod +x /opt/drycc/redis-sentinel/bin/redis*
   mkdir -p "${PROFILE_DIR}"
   cat  << EOF > "${PROFILE_DIR}/${STACK_NAME}.sh"
-export PATH="/opt/drycc/redis/bin:\$PATH"
+export PATH="/opt/drycc/redis-sentinel/bin:\$PATH"
 EOF
-  cp -rf /opt/drycc/redis/* "${DATA_DIR}"
+  cp -rf /opt/drycc/redis-sentinel/* "${DATA_DIR}"
   REDIS_MAJOR_VERSION=$(echo "${STACK_VERSION}" | awk -F "." '{print ""$1"."$2""}') 
   mkdir -p "${DATA_DIR}"/etc && \
-  curl -fsSL -o "${DATA_DIR}"/etc/redis-default.conf https://raw.githubusercontent.com/redis/redis/"${REDIS_MAJOR_VERSION}"/redis.conf
+  curl -fsSL -o "${DATA_DIR}"/etc/sentinel.conf https://raw.githubusercontent.com/redis/redis/"${REDIS_MAJOR_VERSION}"/sentinel.conf
 }
 
 # call build stack

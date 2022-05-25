@@ -181,6 +181,12 @@ repo_info_table = {
         "owner": "redis",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "redis-sentinel": {
+        "name": "redis",
+        "type": "github",
+        "owner": "redis",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "registry": {
         "name": "distribution",
         "type": "github",

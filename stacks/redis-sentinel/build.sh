@@ -68,7 +68,7 @@ EOF
   cp -rf /opt/drycc/redis/* "${DATA_DIR}"
   REDIS_MAJOR_VERSION=$(echo "${STACK_VERSION}" | awk -F "." '{print ""$1"."$2""}') 
   mkdir -p "${DATA_DIR}"/etc && \
-  curl -fsSL -o "${DATA_DIR}"/etc/redis-default.conf https://raw.githubusercontent.com/redis/redis/"${REDIS_MAJOR_VERSION}"/redis.conf
+  curl -fsSL -o "${DATA_DIR}"/etc/sentinel.conf https://raw.githubusercontent.com/redis/redis/"${REDIS_MAJOR_VERSION}"/sentinel.conf
 }
 
 # call build stack

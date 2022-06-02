@@ -31,6 +31,18 @@ repo_info_table = {
         "owner": "prometheus-community",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "kafka_exporter": {
+        "name": "kafka_exporter",
+        "type": "github",
+        "owner": "danielqsj",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "kafka": {
+        "name": "kafka",
+        "type": "github",
+        "owner": "apache",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "caddy": {
         "name": "caddy",
         "type": "github",
@@ -213,6 +225,12 @@ repo_info_table = {
     },
     "wait-for-port": {
         "name": "wait-for-port",
+        "type": "github",
+        "owner": "bitnami",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "render-template": {
+        "name": "render-template",
         "type": "github",
         "owner": "bitnami",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",

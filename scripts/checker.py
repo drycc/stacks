@@ -37,11 +37,23 @@ repo_info_table = {
         "owner": "danielqsj",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "jmx_exporter": {
+        "name": "jmx_exporter",
+        "type": "github",
+        "owner": "prometheus",
+        "match": "^parent-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "kafka": {
         "name": "kafka",
         "type": "github",
         "owner": "apache",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "zookeeper": {
+        "name": "zookeeper",
+        "type": "github",
+        "owner": "apache",
+        "match": "^release-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "caddy": {
         "name": "caddy",

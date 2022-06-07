@@ -10,7 +10,7 @@ function build() {
   mkdir -p "${DATA_DIR}"/env
   echo "/opt/drycc/java" > "${DATA_DIR}"/env/JAVA_HOME
   cat  << EOF >> ${PROFILE_DIR}/${STACK_NAME}.sh
-export LD_LIBRARY_PATH="\${JAVA_HOME}/jre/lib/${OS_ARCH}/server:\${LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="\${JAVA_HOME}/lib/server:\${LD_LIBRARY_PATH}"
 EOF
 
 }

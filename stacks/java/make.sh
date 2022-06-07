@@ -42,7 +42,10 @@ bash configure \
   --with-version-pre="drycc" \
   --with-version-opt="" \
   --with-vendor-version-string="$(date '+%Y%m%d%H%M%S')" \
-  --with-native-debug-symbols=external \
+  --with-native-debug-symbols=none \
   --disable-warnings-as-errors
 make
 cp -rf build/linux-*-server-release/jdk/* "${DATA_DIR}"
+rm -rf "${DATA_DIR}"/lib/jvm.cfg "${DATA_DIR}"/lib/tzdb.dat
+cp -rf build/linux-*-server-release/support/modules_libs/java.base/jvm.cfg "${DATA_DIR}/lib/jvm.cfg"
+cp -rf build/linux-*-server-release/support/modules_libs/java.base/tzdb.dat "${DATA_DIR}/lib/tzdb.dat"

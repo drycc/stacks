@@ -259,6 +259,12 @@ repo_info_table = {
         "owner": "sclevine",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "tikv": {
+        "name": "tikv",
+        "type": "github",
+        "owner": "tikv",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
 }
 
 

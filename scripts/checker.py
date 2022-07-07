@@ -265,7 +265,7 @@ repo_info_table = {
         "owner": "tikv",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "weed": {
+    "seaweedfs": {
         "name": "seaweedfs",
         "type": "github",
         "owner": "chrislusf",

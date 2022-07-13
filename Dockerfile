@@ -58,5 +58,11 @@ RUN install-packages \
 		xz-utils \
 		zlib1g-dev \
         python3-pip \
+		libucl-dev \
         default-libmysqlclient-dev; \
     pip install oss2
+# build upx
+RUN git clone https://github.com/upx/upx; \
+  cd upx; git submodule update --init --recursive; make all UPX_UCLDIR=../ucl-1.03 CXXFLAGS_OPTIMIZE="-no-pie -O2"; cd -; \
+  cp upx/src/upx.out /usr/local/bin/upx; \
+  rm -rf ucl-1.03 ucl-1.03.tar.gz upx;

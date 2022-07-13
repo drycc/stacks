@@ -18,6 +18,7 @@ function build() {
   && go install -tags "tikv"
   mv $GOPATH/bin/weed "${BIN_DIR}"
   cd -
+  
 
   # seaweedfs-csi-driver
   WEED_CSI_VERSION=$(curl -Ls https://github.com/seaweedfs/seaweedfs-csi-driver/releases|grep /seaweedfs/seaweedfs-csi-driver/releases/tag/ | sed -E 's/.*\/seaweedfs\/seaweedfs-csi-driver\/releases\/tag\/v([0-9\.]{1,}(-rc.[0-9]{1,})?)".*/\1/g' | head -1)
@@ -25,6 +26,9 @@ function build() {
   && mv seaweedfs-csi-driver-${WEED_CSI_VERSION} $GOPATH/src/seaweedfs-csi-driver/ \
   && cd $GOPATH/src/seaweedfs-csi-driver \
   && go build -o "${BIN_DIR}"/weed-csi ./cmd/seaweedfs-csi-driver/main.go
+
+  # upx
+  upx --lzma --best "${BIN_DIR}"/*
 }
 
 # call build stack

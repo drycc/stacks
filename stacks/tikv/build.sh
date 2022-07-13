@@ -28,6 +28,9 @@ function build() {
   tar -xzf pd-recover.tar.gz
   mv pd-recover "${BIN_DIR}"
 
+  #upx
+  upx --lzma --best "${BIN_DIR}"/*
+  #clean
   rm tikv.tar.gz pd.tar.gz ctl.tar.gz pd-recover.tar.gz binlogctl cdc ctl etcdctl tidb-ctl tidb-lightning-ctl -rf
 }
 

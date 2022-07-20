@@ -259,11 +259,17 @@ repo_info_table = {
         "owner": "sclevine",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "csi-s3": {
-        "name": "k8s-csi-s3",
+    "geesefs": {
+        "name": "geesefs",
         "type": "github",
         "owner": "yandex-cloud",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "juicefs": {
+        "name": "juicefs",
+        "type": "github",
+        "owner": "juicedata",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}(-rc){0,1}[0-9]{0,}$",
     },
     "tikv": {
         "name": "tikv",

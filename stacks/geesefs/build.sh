@@ -11,14 +11,16 @@ function build() {
   BIN_DIR="${DATA_DIR}"/bin
   mkdir -p "${BIN_DIR}"
   # geesefs
-  curl -sSL "https://github.com/yandex-cloud/geesefs/archive/refs/tags/v${STACK_VERSION}.tar.gz" | tar -xz \
-  && mv geesefs-${STACK_VERSION} $GOPATH/src/geesefs/ \
+  #curl -sSL "https://github.com/yandex-cloud/geesefs/archive/refs/tags/v${STACK_VERSION}.tar.gz" | tar -xz \
+  wget https://github.com/duanhongyi/geesefs/archive/refs/heads/master.zip \
+  && unzip master.zip \
+  && mv geesefs-master $GOPATH/src/geesefs/ \
   && cd $GOPATH/src/geesefs \
   && export GO111MODULE=on \
   && CGO_ENABLED=0 go build \
     -a -ldflags '-extldflags "-static"' -o /bin/geesefs .
   mv /bin/geesefs "${BIN_DIR}"
-
+  cd - && rm -rf master.zip
    # upx
   upx --lzma --best "${BIN_DIR}"/*
 }

@@ -259,12 +259,6 @@ repo_info_table = {
         "owner": "sclevine",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "geesefs": {
-        "name": "geesefs",
-        "type": "github",
-        "owner": "yandex-cloud",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "juicefs": {
         "name": "juicefs",
         "type": "github",
@@ -276,12 +270,6 @@ repo_info_table = {
         "type": "github",
         "owner": "tikv",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
-    "seaweedfs": {
-        "name": "seaweedfs",
-        "type": "github",
-        "owner": "chrislusf",
-        "match": "^[0-9]{1,}\.[0-9]{1,}$",
     },
 }
 

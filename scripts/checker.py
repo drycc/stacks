@@ -271,6 +271,12 @@ repo_info_table = {
         "owner": "tikv",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "prometheus": {
+        "name": "prometheus",
+        "type": "github",
+        "owner": "prometheus",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
 }
 
 

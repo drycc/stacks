@@ -6,7 +6,7 @@
 # Implement build function
 function build() {
   generate-stack-path
-  install-stack go 1.16.15 && . init-stack
+  install-stack go 1.19.3 && . init-stack
 
   curl -sSL "https://github.com/vouch/vouch-proxy/archive/refs/tags/v${STACK_VERSION}.tar.gz" | tar -xz \
   && mv vouch-proxy-${STACK_VERSION} $GOPATH/src/vouch-proxy/ \

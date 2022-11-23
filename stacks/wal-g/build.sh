@@ -8,7 +8,7 @@ function build() {
   generate-stack-path
   install-packages \
     gcc liblzo2-dev make cmake git build-essential
-  install-stack go 1.17.7
+  install-stack go 1.19.3
   . /opt/drycc/go/profile.d/*.sh
 
   git clone https://github.com/wal-g/wal-g/  $GOPATH/src/wal-g \

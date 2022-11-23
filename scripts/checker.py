@@ -49,12 +49,6 @@ repo_info_table = {
         "owner": "apache",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "zookeeper": {
-        "name": "zookeeper",
-        "type": "github",
-        "owner": "apache",
-        "match": "^release-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "caddy": {
         "name": "caddy",
         "type": "github",

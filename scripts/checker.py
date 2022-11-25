@@ -274,7 +274,13 @@ repo_info_table = {
     "node_exporter": {
         "name": "node_exporter",
         "type": "github",
-        "owner": "node_exporter",
+        "owner": "prometheus",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "kube-state-metrics": {
+        "name": "kube-state-metrics",
+        "type": "github",
+        "owner": "kubernetes",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
 }

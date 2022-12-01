@@ -271,6 +271,12 @@ repo_info_table = {
         "owner": "prometheus",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "pushgateway": {
+        "name": "pushgateway",
+        "type": "github",
+        "owner": "prometheus",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "node_exporter": {
         "name": "node_exporter",
         "type": "github",

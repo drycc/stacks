@@ -283,12 +283,6 @@ repo_info_table = {
         "owner": "kubernetes",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "configmap-reload": {
-        "name": "configmap-reload",
-        "type": "github",
-        "owner": "jimmidyson",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
 }
 
 

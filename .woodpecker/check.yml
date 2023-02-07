@@ -1,0 +1,22 @@
+platform: linux/amd64
+
+labels:
+  type: exec
+
+pipeline:
+- name: check
+  image: bash
+  commands:
+  - docker run --rm
+      -e GITHUB_TOKEN=$GITHUB_TOKEN
+      -v "$(pwd):$(pwd)"
+      -w "$(pwd)"
+      drycc/python-dev
+      python scripts/checker.py
+  secrets:
+  - github_token
+  - dev_registry
+  - drycc_registry
+  when:
+    event:
+    - cron

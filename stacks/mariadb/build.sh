@@ -10,6 +10,7 @@ function build() {
 
   # Generate binary
   curl -sSL "https://archive.mariadb.org/mariadb-${STACK_VERSION}/source/mariadb-${STACK_VERSION}.tar.gz" | tar -xz && \
+  echo "running building..."
   cd mariadb-"${STACK_VERSION}" && \
   cmake . -DCMAKE_INSTALL_PREFIX=/opt/drycc/mariadb \
   -DMYSQL_DATADIR=/opt/drycc/mariadb/data \
@@ -24,13 +25,13 @@ function build() {
   -DDEFAULT_CHARSET=utf8 \
   -DDEFAULT_COLLATION=utf8_general_ci \
   && \
-  make install/strip
-
+  make install/strip 2>&1 >/dev/null
+  echo "build mariadb ok..."
   mkdir -p "${PROFILE_DIR}"
   cat  << EOF > "${PROFILE_DIR}/${STACK_NAME}.sh"
 export PATH="/opt/drycc/mariadb/bin:\$PATH"
 EOF
-
+  echo "generate profile ok..."
   cp -rf /opt/drycc/mariadb/* "${DATA_DIR}"
 }
 

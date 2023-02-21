@@ -269,7 +269,7 @@ repo_info_table = {
         "name": "prometheus",
         "type": "github",
         "owner": "prometheus",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+        "match": "^v[2-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "node_exporter": {
         "name": "node_exporter",

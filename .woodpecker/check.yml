@@ -8,6 +8,8 @@ pipeline:
   image: bash
   commands:
   - docker run --rm
+      --privileged
+      --network host
       -e GITHUB_TOKEN=$GITHUB_TOKEN
       -v "$(pwd):$(pwd)"
       -w "$(pwd)"

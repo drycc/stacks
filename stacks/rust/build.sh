@@ -21,8 +21,8 @@ function build() {
   ./install.sh --prefix=/opt/drycc/rust
   rm -rf /opt/drycc/rust/share /opt/drycc/rust/bin/rustdoc
   cp -rf /opt/drycc/rust/* "${DATA_DIR}"
-  mkdir -p "${DATA_DIR}"/target "${DATA_DIR}"/env
-  echo "/opt/drycc/rust" > "${DATA_DIR}"/env/CARGO_HOME
+  mkdir -p "${DATA_DIR}"/env "${DATA_DIR}"/cargo "${DATA_DIR}"/target
+  echo "/opt/drycc/rust/cargo" > "${DATA_DIR}"/env/CARGO_HOME
   echo "/opt/drycc/rust/target" > "${DATA_DIR}"/env/CARGO_TARGET_DIR
   cd ..
   

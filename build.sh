@@ -73,6 +73,14 @@ function renew() {
   git push --tag
 }
 
+function clean-tags() {
+  for tag in $(git tag --sort creatordate|head -n "$1")
+  do
+    git tag -d ${tag}
+    git push origin :refs/tags/${tag}
+  done
+}
+
 function all() {
   STACK_NAME=$(echo "${1}" | cut -d '@' -f 1)
   STACK_VERSION=$(echo "${1}" | cut -d '@' -f 2)

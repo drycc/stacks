@@ -110,10 +110,10 @@ repo_info_table = {
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "java": {
-        "name": "jdk",
-        "type": "github",
-        "owner": "openjdk",
-        "match": "^jdk-[0-9]{1,}\+[0-9]{1,}$",
+        "url": "https://learn.microsoft.com/en-us/java/openjdk/download",
+        "type": "url",
+        "search": r"https://aka.ms/download-jdk/microsoft-jdk-[0-9]{1,}.[0-9]{1,}.[0-9]{1,}-linux-x64.tar.gz",
+        "version": r"[0-9]{1,}.[0-9]{1,}.[0-9]{1,}",
     },
     "jq": {
         "name": "jq",
@@ -386,6 +386,17 @@ def check_github_version(stack):
             else:
                 break
 
+def check_url_version(stack):
+    info = repo_info_table[stack]
+    html = requests.get(info["url"]).text
+    versions = set()
+    for url in set(re.findall(info["search"], html)):
+        match = re.search(info["version"], url)
+        if match:
+            versions.add(match.group())
+    for version in versions:
+        create_github_issue(stack, version)
+
 
 def main():
     for stack in os.listdir(os.path.join(os.path.dirname(__file__), "..", "stacks")):
@@ -393,10 +404,12 @@ def main():
             raise NotImplementedError(f"{stack} not in repo_info_table")
         else:
             repo_type = repo_info_table[stack]["type"]
-            if repo_type != "github":
-                raise NotImplementedError(f"{repo_type} NotImplemented")
-            else:
+            if repo_type == "github":
                 check_github_version(stack)
+            elif repo_type == 'url':
+                check_url_version(stack)
+            else:
+                raise NotImplementedError(f"{repo_type} NotImplemented")
 
 
 if __name__ == "__main__":

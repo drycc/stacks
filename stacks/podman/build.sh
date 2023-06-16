@@ -37,7 +37,7 @@ EOF
     go-md2man \
     libapparmor-dev
   
-  install-stack go 1.19.3
+  install-stack go "${GO_VERSION}"
   export GOPATH=/opt/drycc/go
   export PATH=$GOPATH/bin:$PATH
 

@@ -62,6 +62,7 @@ set -eux; \
 	; \
 	tar -Jxf /usr/src/php.tar.xz -C /usr/src; \
 	mv /usr/src/php-${STACK_VERSION} /usr/src/php; \
+	cp -rf /usr/src/php /opt/drycc/php/src; \
 	cd /usr/src/php; \
 	gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)"; \
 	debMultiarch="$(dpkg-architecture --query DEB_BUILD_MULTIARCH)"; \

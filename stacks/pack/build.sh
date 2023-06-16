@@ -7,7 +7,7 @@
 function build() {
   generate-stack-path
   install-packages make
-  install-stack go 1.19.3 && . init-stack
+  install-stack go "${GO_VERSION}" && . init-stack
 
   curl -sSL "https://github.com/buildpacks/pack/archive/refs/tags/v${STACK_VERSION}.tar.gz" | tar -xz \
   && cd pack-${STACK_VERSION} \

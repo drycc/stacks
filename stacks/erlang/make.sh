@@ -3,11 +3,11 @@ REBAR3_VERSION=$(curl -Ls https://github.com/erlang/rebar3/releases|grep /erlang
 
 set -xe \
 	&& OTP_DOWNLOAD_URL="https://github.com/erlang/otp/archive/OTP-${OTP_VERSION}.tar.gz" \
-	&& runtimeDeps='libodbc1 libsctp1 libwxgtk3.0' \
-	&& buildDeps='unixodbc-dev libsctp-dev libwxgtk-webview3.0-gtk3-dev' \
+	&& runtimeDeps='libodbc1 libsctp1 libwxgtk[0-9.-]{1,} libwxgtk-webview[0-9.-]{1,}' \
+	&& buildDeps='unixodbc-dev libsctp-dev libwxgtk-webview[0-9.-]{1,}-dev' \
 	&& apt-get update \
-	&& apt-get install -y --no-install-recommends $runtimeDeps \
-	&& apt-get install -y --no-install-recommends $buildDeps \
+	&& echo apt-get install -y --no-install-recommends $runtimeDeps \
+	&& echo apt-get install -y --no-install-recommends $buildDeps \
 	&& curl -fSL -o otp-src.tar.gz "$OTP_DOWNLOAD_URL" \
 	&& export ERL_TOP="/usr/src/otp_src_${OTP_VERSION%%@*}" \
 	&& mkdir -vp $ERL_TOP \

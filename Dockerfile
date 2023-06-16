@@ -57,12 +57,16 @@ RUN install-packages \
 		unzip \
 		xz-utils \
 		zlib1g-dev \
-        python3-pip \
+        python3-venv \
 		libucl-dev \
         default-libmysqlclient-dev; \
-    pip install oss2
-# build upx
-RUN git clone -b v3.96 https://github.com/upx/upx --depth=1; \
-  cd upx; git submodule update --init --recursive; make all UPX_UCLDIR=../ucl-1.03 CXXFLAGS_OPTIMIZE="-no-pie -O2"; cd -; \
-  cp upx/src/upx.out /usr/local/bin/upx; \
-  rm -rf ucl-1.03 ucl-1.03.tar.gz upx;
+	python3 -m venv /usr/local/python
+
+ENV PATH "/usr/local/python/bin:${PATH}"
+
+RUN UPX_VERSION=4.0.2; \
+  OS_ARCH=$(dpkg --print-architecture); \
+  wget https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-${OS_ARCH}_linux.tar.xz; \
+  tar -Jxvf upx-${UPX_VERSION}-${OS_ARCH}_linux.tar.xz; \
+  cp upx-${UPX_VERSION}-${OS_ARCH}_linux/upx /usr/local/bin; \
+  pip install oss2;

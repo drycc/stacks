@@ -12,8 +12,9 @@ pipeline:
 - name: publish-linux
   image: bash
   commands:
-  - CODENAME=bookworm ./build.sh all $CI_COMMIT_TAG
+  - ./build.sh all $CI_COMMIT_TAG
   secrets:
+  - codename
   - oss_endpoint
   - oss_access_key_id
   - oss_access_key_secret

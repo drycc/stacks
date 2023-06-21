@@ -3,6 +3,7 @@
 # Load stack utils
 . /usr/bin/stack-utils
 POSTGIS_VERSION=$(curl -Ls https://github.com/postgis/postgis/tags|grep /postgis/postgis/releases/tag/ | sed -E 's/.*\/postgis\/postgis\/releases\/tag\/([0-9\.]{1,}(-rc.[0-9]{1,})?)".*/\1/g' | head -1)
+TIMESCALE_VERSION=$(curl -Ls https://github.com/timescale/timescaledb/releases|grep /timescale/timescaledb/releases/tag/ | sed -E 's/.*\/timescale\/timescaledb\/releases\/tag\/([0-9\.]{1,})".*/\1/g' | head -1)
 # Implement build function
 function build() {
   # Generate binary
@@ -79,17 +80,27 @@ function build() {
     --prefix="/opt/drycc/postgresql/${PG_MAJOR}/postgis/${POSTGIS_VERSION}" \
     --with-pgconfig=/opt/drycc/postgresql/"${PG_MAJOR}"/bin/pg_config \
     && \
-    make && \
-    make install
+  make && \
+  make install && \
+  cd - && \
+  rm -rf postgis-"${POSTGIS_VERSION}"
+  
+  # timescaledb
+  curl -sSL "https://github.com/timescale/timescaledb/archive/refs/tags/${TIMESCALE_VERSION}.tar.gz" | tar -xz &&
+  cd timescaledb-"${TIMESCALE_VERSION}" && \
+  cmake -DPG_CONFIG=/opt/drycc/postgresql/"${PG_MAJOR}"/bin/pg_config -DAPACHE_ONLY=true && \
+  make && \
+  make install && \
+  cd - && \
+  rm -rf timescaledb-"${TIMESCALE_VERSION}"
 
   cat  << EOF > "${PROFILE_DIR}/${STACK_NAME}.sh"
 export PATH="/opt/drycc/postgresql/$PG_MAJOR/bin:\$PATH"
 export LD_LIBRARY_PATH="/opt/drycc/postgresql/$PG_MAJOR/lib:\$LD_LIBRARY_PATH"
 EOF
   cp -rf /opt/drycc/postgresql/* "${DATA_DIR}"
-  cd /workspace && rm "postgresql-${PG_VER}" -rf
+  cd /workspace && rm -rf "postgresql-${PG_VER}"
 }
 
 # call build stack
 build-stack "${1}"
-

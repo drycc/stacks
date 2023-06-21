@@ -17,6 +17,7 @@ RUN install-packages \
 		procps
 
 RUN install-packages \
+        cmake \
 		autoconf \
 		automake \
 		bzip2 \
@@ -69,4 +70,5 @@ RUN UPX_VERSION=4.0.2; \
   wget https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-${OS_ARCH}_linux.tar.xz; \
   tar -Jxvf upx-${UPX_VERSION}-${OS_ARCH}_linux.tar.xz; \
   cp upx-${UPX_VERSION}-${OS_ARCH}_linux/upx /usr/local/bin; \
+  rm -rf upx-*; \
   pip install oss2;

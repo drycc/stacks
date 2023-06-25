@@ -97,12 +97,6 @@ repo_info_table = {
         "owner": "helm",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "influxdb": {
-        "name": "influxdb",
-        "type": "github",
-        "owner": "influxdata",
-        "match": "^v[2-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "ini-file": {
         "name": "ini-file",
         "type": "github",

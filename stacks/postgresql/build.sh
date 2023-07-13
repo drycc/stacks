@@ -2,7 +2,6 @@
 
 # Load stack utils
 . /usr/bin/stack-utils
-PG_CRON_VERSION=$(curl -Ls https://github.com/citusdata/pg_cron/tags|grep /citusdata/pg_cron/releases/tag/ | sed -E 's/.*\/citusdata\/pg_cron\/releases\/tag\/(v[0-9\.]{1,}(-rc.[0-9]{1,})?)".*/\1/g' | head -1)
 POSTGIS_VERSION=$(curl -Ls https://github.com/postgis/postgis/tags|grep /postgis/postgis/releases/tag/ | sed -E 's/.*\/postgis\/postgis\/releases\/tag\/([0-9\.]{1,}(-rc.[0-9]{1,})?)".*/\1/g' | head -1)
 TIMESCALE_VERSION=$(curl -Ls https://github.com/timescale/timescaledb/releases|grep /timescale/timescaledb/releases/tag/ | sed -E 's/.*\/timescale\/timescaledb\/releases\/tag\/([0-9\.]{1,})".*/\1/g' | head -1)
 # Implement build function

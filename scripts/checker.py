@@ -277,6 +277,12 @@ repo_info_table = {
         "owner": "kubernetes",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "zookeeper": {
+        "name": "zookeeper",
+        "type": "github",
+        "owner": "apache",
+        "match": "^release-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
 }
 
 

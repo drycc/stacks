@@ -65,7 +65,7 @@ RUN install-packages \
 
 ENV PATH "/usr/local/python/bin:${PATH}"
 
-RUN UPX_VERSION=4.0.2; \
+RUN UPX_VERSION=4.1.0; \
   OS_ARCH=$(dpkg --print-architecture); \
   wget https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-${OS_ARCH}_linux.tar.xz; \
   tar -Jxvf upx-${UPX_VERSION}-${OS_ARCH}_linux.tar.xz; \

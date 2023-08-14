@@ -61,6 +61,12 @@ repo_info_table = {
         "owner": "fluent",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "fluent-bit": {
+        "name": "fluent-bit",
+        "type": "github",
+        "owner": "fluent",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "go": {
         "name": "go",
         "type": "github",

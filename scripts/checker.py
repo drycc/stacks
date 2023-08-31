@@ -271,6 +271,12 @@ repo_info_table = {
         "owner": "kubernetes",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "mysql": {
+        "name": "mysql-server",
+        "type": "github",
+        "owner": "mysql",
+        "match": "^mysql-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "zookeeper": {
         "name": "zookeeper",
         "type": "github",

@@ -76,6 +76,8 @@ function build() {
   strip  /opt/drycc/mysql/bin/perror
   strip  /opt/drycc/mysql/bin/zlib_decompress
 
+   # remove mysql test dir
+  rm -rf /opt/drycc/mysql/mysql-test 
   # copy mysql build files to data dir
   cp -r /opt/drycc/mysql/ ${DATA_DIR}/
 

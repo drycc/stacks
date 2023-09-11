@@ -277,6 +277,12 @@ repo_info_table = {
         "owner": "mysql",
         "match": "^mysql-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "mysql-shell": {
+        "name": "mysql-shell",
+        "type": "github",
+        "owner": "mysql",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "zookeeper": {
         "name": "zookeeper",
         "type": "github",

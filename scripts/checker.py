@@ -289,6 +289,12 @@ repo_info_table = {
         "owner": "apache",
         "match": "^release-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "spark": {
+        "name": "spark",
+        "type": "github",
+        "owner": "apache",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
 }
 
 

@@ -295,6 +295,18 @@ repo_info_table = {
         "owner": "apache",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "opensearch": {
+        "name": "OpenSearch",
+        "type": "github",
+        "owner": "opensearch-project",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "opensearch-dashboards": {
+        "name": "OpenSearch-Dashboards",
+        "type": "github",
+        "owner": "opensearch-project",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
 }
 
 

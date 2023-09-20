@@ -17,6 +17,7 @@ function build() {
   esac; 
   curl -fsSL -o tmp.tar.gz "${downloadUrl}"
   tar -xzf tmp.tar.gz
+  rm opensearch-${STACK_VERSION}/config/opensearch.yml opensearch-${STACK_VERSION}/jdk -rf
   mv opensearch-${STACK_VERSION}/* "${DATA_DIR}"
   rm opensearch-${STACK_VERSION} tmp.tar.gz -rf
 

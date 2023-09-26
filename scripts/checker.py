@@ -247,6 +247,12 @@ repo_info_table = {
         "owner": "sclevine",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "yq": {
+        "name": "yq",
+        "type": "github",
+        "owner": "mikefarah",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "juicefs": {
         "name": "juicefs",
         "type": "github",
@@ -294,6 +300,24 @@ repo_info_table = {
         "type": "github",
         "owner": "apache",
         "match": "^release-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "spark": {
+        "name": "spark",
+        "type": "github",
+        "owner": "apache",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "opensearch": {
+        "name": "OpenSearch",
+        "type": "github",
+        "owner": "opensearch-project",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "opensearch-dashboards": {
+        "name": "OpenSearch-Dashboards",
+        "type": "github",
+        "owner": "opensearch-project",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
 }
 

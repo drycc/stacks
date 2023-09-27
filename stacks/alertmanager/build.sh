@@ -12,7 +12,7 @@ function build() {
   mkdir -p "${BIN_DIR}"
   mv ./alertmanager-${STACK_VERSION}.linux-${OS_ARCH}/alertmanager "${BIN_DIR}"
   mv ./alertmanager-${STACK_VERSION}.linux-${OS_ARCH}/amtool "${BIN_DIR}"
-  rm  -rf ./prometheus-${STACK_VERSION}.linux-${OS_ARCH}
+  rm  -rf ./alertmanager-${STACK_VERSION}.linux-${OS_ARCH}
   #upx
   upx --lzma --best "${BIN_DIR}"/*
 }

@@ -7,7 +7,7 @@ pipeline:
 - name: check
   image: bash
   commands:
-  - docker run --rm
+  - podman run --rm
       --privileged
       --network host
       -e GITHUB_TOKEN=$GITHUB_TOKEN

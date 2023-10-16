@@ -13,7 +13,7 @@ pipeline:
       -e GITHUB_TOKEN=$GITHUB_TOKEN
       -v "$(pwd):$(pwd)"
       -w "$(pwd)"
-      drycc/python-dev
+      registry.drycc.cc/drycc/python-dev
       python scripts/checker.py
   secrets:
   - github_token

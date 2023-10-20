@@ -21,8 +21,14 @@ function build() {
   
 
   # seaweedfs-csi-driver
-  WEED_CSI_VERSION=$(curl -Ls https://github.com/seaweedfs/seaweedfs-csi-driver/releases|grep /seaweedfs/seaweedfs-csi-driver/releases/tag/ | sed -E 's/.*\/seaweedfs\/seaweedfs-csi-driver\/releases\/tag\/v([0-9\.]{1,}(-rc.[0-9]{1,})?)".*/\1/g' | head -1)
-  curl -sSL "https://github.com/seaweedfs/seaweedfs-csi-driver/archive/refs/tags/v${WEED_CSI_VERSION}.tar.gz" | tar -xz \
+  # WEED_CSI_VERSION=$(curl -Ls https://github.com/seaweedfs/seaweedfs-csi-driver/releases|grep /seaweedfs/seaweedfs-csi-driver/releases/tag/ | sed -E 's/.*\/seaweedfs\/seaweedfs-csi-driver\/releases\/tag\/v([0-9\.]{1,}(-rc.[0-9]{1,})?)".*/\1/g' | head -1)
+  WEED_CSI_VERSION=master
+  if [[ "$WEED_CSI_VERSION" == "master" ]]; then
+    WEED_CSI_URL="https://github.com/seaweedfs/seaweedfs-csi-driver/archive/refs/heads/${WEED_CSI_VERSION}.tar.gz"
+  else
+    WEED_CSI_URL="https://github.com/seaweedfs/seaweedfs-csi-driver/archive/refs/tags/v${WEED_CSI_VERSION}.tar.gz"
+  fi
+  curl -sSL "${WEED_CSI_URL}" | tar -xz \
   && mv seaweedfs-csi-driver-${WEED_CSI_VERSION} $GOPATH/src/seaweedfs-csi-driver/ \
   && cd $GOPATH/src/seaweedfs-csi-driver \
   && go build -o "${BIN_DIR}"/weed-csi ./cmd/seaweedfs-csi-driver/main.go

@@ -6,19 +6,15 @@
 # Implement build function
 function build() {
   generate-stack-path
-  install-packages make
-  install-stack go "${GO_VERSION}" && . init-stack
-
-  curl -sSL "https://github.com/buildpacks/pack/archive/refs/tags/v${STACK_VERSION}.tar.gz" | tar -xz \
-  && cd pack-${STACK_VERSION} \
-  && make
-
+  if [[ "${OS_ARCH}" == "amd64" ]]; then
+    pack_download_url="https://github.com/buildpacks/pack/releases/download/v${STACK_VERSION}/pack-v${STACK_VERSION}-linux.tgz"
+  else
+    pack_download_url="https://github.com/buildpacks/pack/releases/download/v${STACK_VERSION}/pack-v${STACK_VERSION}-linux-${OS_ARCH}.tgz"
+  fi
   BIN_DIR="${DATA_DIR}"/bin
   mkdir -p "${BIN_DIR}"
-  mv ./out/pack "${BIN_DIR}"
-  rm -rf pack-${STACK_VERSION}
+  curl -sSL "${pack_download_url}" | tar xvz -C "${BIN_DIR}"
 }
 
 # call build stack
 build-stack "${1}"
-

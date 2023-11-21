@@ -115,6 +115,12 @@ repo_info_table = {
         "search": r"https://aka.ms/download-jdk/microsoft-jdk-[0-9]{1,}.[0-9]{1,}.[0-9]{1,}-linux-x64.tar.gz",
         "version": r"[0-9]{1,}.[0-9]{1,}.[0-9]{1,}",
     },
+    "netcat": {
+        "url": "https://sourceforge.net/projects/netcat/files/netcat",
+        "type": "url",
+        "search": r"netcat-[0-9]{1,}.[0-9]{1,}.[0-9]{1,}.tar.bz2",
+        "version": r"[0-9]{1,}.[0-9]{1,}.[0-9]{1,}",
+    },
     "jq": {
         "name": "jq",
         "type": "github",
@@ -330,6 +336,12 @@ repo_info_table = {
         "type": "github",
         "owner": "opensearch-project",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "seaweedfs": {
+        "name": "seaweedfs",
+        "type": "github",
+        "owner": "seaweedfs",
+        "match": "^[0-9]{1,}\.[0-9]{1,}$",
     },
 }
 

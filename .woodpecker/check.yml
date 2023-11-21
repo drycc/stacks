@@ -7,13 +7,13 @@ pipeline:
 - name: check
   image: bash
   commands:
-  - docker run --rm
+  - podman run --rm
       --privileged
       --network host
       -e GITHUB_TOKEN=$GITHUB_TOKEN
       -v "$(pwd):$(pwd)"
       -w "$(pwd)"
-      drycc/python-dev
+      registry.drycc.cc/drycc/python-dev
       python scripts/checker.py
   secrets:
   - github_token

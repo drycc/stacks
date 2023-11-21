@@ -16,7 +16,7 @@ BUILDPACK_DEP_IMAGE="${DRYCC_REGISTRY}"/drycc/buildpack-dep:"${CODENAME}"
 
 function create-buildpack-dep {
   # build buildpack-dep image
-  docker build --pull -f "${CURRENT_DIR}"/Dockerfile --build-arg CODENAME="${CODENAME}" --build-arg DRYCC_REGISTRY="${DRYCC_REGISTRY}" . -t "${BUILDPACK_DEP_IMAGE}"
+  podman build --pull -f "${CURRENT_DIR}"/Dockerfile --build-arg CODENAME="${CODENAME}" --build-arg DRYCC_REGISTRY="${DRYCC_REGISTRY}" . -t "${BUILDPACK_DEP_IMAGE}"
 }
 
 function build {
@@ -24,7 +24,7 @@ function build {
   STACK_NAME="${1:?STACK_NAME is required}"
   stack_version="${2:?stack_version is required}"
   create-buildpack-dep
-  docker run --rm \
+  podman run --rm \
     --privileged=true \
     --env STACK_DOWNLOAD_URL="${STACK_DOWNLOAD_URL:-}" \
     --env STACK_NAME="${STACK_NAME}" \
@@ -40,7 +40,7 @@ function build {
 function upload {
   STACK_NAME="${1:?stack_name is required}"
   create-buildpack-dep
-  docker run --rm \
+  podman run --rm \
     --env OSS_ENDPOINT=${OSS_ENDPOINT} \
     --env OSS_ACCESS_KEY_ID=${OSS_ACCESS_KEY_ID} \
     --env OSS_ACCESS_KEY_SECRET=${OSS_ACCESS_KEY_SECRET} \
@@ -53,7 +53,7 @@ function upload {
 }
 
 function symlink {
-  docker run --rm \
+  podman run --rm \
     --env OSS_ENDPOINT=${OSS_ENDPOINT} \
     --env OSS_ACCESS_KEY_ID=${OSS_ACCESS_KEY_ID} \
     --env OSS_ACCESS_KEY_SECRET=${OSS_ACCESS_KEY_SECRET} \

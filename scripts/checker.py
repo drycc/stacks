@@ -37,6 +37,12 @@ repo_info_table = {
         "owner": "prometheus-community",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "pgweb": {
+        "name": "pgweb",
+        "type": "github",
+        "owner": "sosedoff",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },    
     "jmx_exporter": {
         "name": "jmx_exporter",
         "type": "github",
@@ -294,6 +300,12 @@ repo_info_table = {
         "type": "github",
         "owner": "mysql",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "repmgr": {
+        "name": "repmgr",
+        "type": "github",
+        "owner": "EnterpriseDB",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "zookeeper": {
         "name": "zookeeper",

@@ -307,12 +307,6 @@ repo_info_table = {
         "owner": "mysql",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "repmgr": {
-        "name": "repmgr",
-        "type": "github",
-        "owner": "EnterpriseDB",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "zookeeper": {
         "name": "zookeeper",
         "type": "github",

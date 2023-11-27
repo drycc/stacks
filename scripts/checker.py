@@ -13,6 +13,12 @@ repo_info_table = {
         "owner": "prometheus",
         "match": "^v[2-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "cloudbeaver": {
+        "name": "cloudbeaver",
+        "type": "github",
+        "owner": "dbeaver",
+        "match": "[2-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "vouch-proxy": {
         "name": "vouch-proxy",
         "type": "github",
@@ -36,7 +42,7 @@ repo_info_table = {
         "type": "github",
         "owner": "prometheus-community",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
+    },  
     "jmx_exporter": {
         "name": "jmx_exporter",
         "type": "github",

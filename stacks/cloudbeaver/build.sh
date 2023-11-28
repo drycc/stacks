@@ -10,9 +10,8 @@ function build() {
   . init-stack
   JAVA_VERSION=17.0.9
   NODE_VERSION=16.20.1
-  install-stack java ${JAVA_VERSION}
-  install-packages maven gnupg gnupg2 git
-  java --version &&  mvn --version 
+  install-packages gnupg gnupg2 git maven
+  mvn --version 
   curl -sL https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add -
   echo "deb https://dl.yarnpkg.com/debian/ stable main" |  tee /etc/apt/sources.list.d/yarn.list
   curl -sL https://deb.nodesource.com/setup_14.x |   bash -

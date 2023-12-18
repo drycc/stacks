@@ -33,7 +33,6 @@ set -eux; \
 		--enable-shared \
 		--with-lto \
 		--with-system-expat \
-		--with-system-ffi \
 		--without-ensurepip \
 	; \
 	nproc="$(nproc)"; \

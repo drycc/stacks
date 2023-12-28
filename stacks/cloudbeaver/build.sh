@@ -26,6 +26,7 @@ function build() {
   git clone https://github.com/dbeaver/cloudbeaver.git 
   cd cloudbeaver 
   git checkout -b release_${STACK_VERSION} --track origin/release_${STACK_VERSION}
+
   cd deploy && ./build.sh && cp -r cloudbeaver/* ${DATA_DIR}
   cat << EOF >> "${PROFILE_DIR}"/cloudbeaver.sh
 export CLOUDBEAVER_HOME="/opt/drycc/cloudbeaver"

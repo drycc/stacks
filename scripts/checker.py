@@ -441,7 +441,7 @@ def check_github_version(stack):
                 "%Y-%m-%dT%H:%M:%S"
             )
         if re.match(info["match"], tag["node"]["name"]):
-            if (datetime.utcnow() - date).days < 5:
+            if (datetime.utcnow() - date).days <= 7:
                 create_github_issue(stack, tag["node"]["name"])
             else:
                 break

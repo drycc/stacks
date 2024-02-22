@@ -9,7 +9,8 @@ function build() {
   curl -L -o /opt/drycc/tmp.tar.gz https://go.dev/dl/go"${STACK_VERSION}".linux-"${OS_ARCH}".tar.gz
   cd /opt/drycc && tar -xzf tmp.tar.gz && rm -rf tmp.tar.gz && cd -
   cat  << EOF >> "${PROFILE_DIR}"/go.sh
-export GOPATH="/opt/drycc/go"
+export GOPATH=\$HOME/go
+export PATH=\$PATH:\$GOPATH/bin
 EOF
   cp -rf /opt/drycc/go/* ${DATA_DIR}
 }

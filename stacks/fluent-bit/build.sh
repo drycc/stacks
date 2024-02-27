@@ -10,6 +10,7 @@ function build() {
     gcc liblzo2-dev make cmake git build-essential
   install-stack go "${GO_VERSION}"
   . /opt/drycc/go/profile.d/*.sh
+  mkdir -p $GOPATH/src
 
   git clone -b v$STACK_VERSION --depth 1 https://github.com/fluent/fluent-bit  $GOPATH/src/fluent-bit \
     && cd $GOPATH/src/fluent-bit/build \

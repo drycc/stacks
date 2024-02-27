@@ -7,6 +7,7 @@
 function build() {
   generate-stack-path
   install-stack go "${GO_VERSION}" && . init-stack
+  mkdir -p $GOPATH/src
 
   curl -sSL "https://github.com/subfuzion/envtpl/archive/refs/tags/v${STACK_VERSION}.tar.gz" | tar -xz \
   && mv envtpl-${STACK_VERSION} $GOPATH/src/envtpl/ \

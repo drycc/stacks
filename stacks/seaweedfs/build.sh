@@ -21,8 +21,7 @@ function build() {
   
 
   # seaweedfs-csi-driver
-  # WEED_CSI_VERSION=$(curl -Ls https://github.com/seaweedfs/seaweedfs-csi-driver/releases|grep /seaweedfs/seaweedfs-csi-driver/releases/tag/ | sed -E 's/.*\/seaweedfs\/seaweedfs-csi-driver\/releases\/tag\/v([0-9\.]{1,}(-rc.[0-9]{1,})?)".*/\1/g' | head -1)
-  WEED_CSI_VERSION=master
+  WEED_CSI_VERSION=$(curl -Ls https://github.com/seaweedfs/seaweedfs-csi-driver/releases|grep /seaweedfs/seaweedfs-csi-driver/releases/tag/ | sed -E 's/.*\/seaweedfs\/seaweedfs-csi-driver\/releases\/tag\/v([0-9\.]{1,}(-rc.[0-9]{1,})?)".*/\1/g' | head -1)
   if [[ "$WEED_CSI_VERSION" == "master" ]]; then
     WEED_CSI_URL="https://github.com/seaweedfs/seaweedfs-csi-driver/archive/refs/heads/${WEED_CSI_VERSION}.tar.gz"
   else

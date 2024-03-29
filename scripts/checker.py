@@ -361,6 +361,12 @@ repo_info_table = {
         "owner": "apache",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "envoy": {
+        "name": "envoy",
+        "type": "github",
+        "owner": "envoyproxy",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
 }
 
 

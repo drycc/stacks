@@ -11,6 +11,8 @@ function build() {
   install-stack go "${GO_VERSION}"
   . /opt/drycc/go/profile.d/*.sh
 
+  mkdir -p $GOPATH/src
+
   git clone https://github.com/wal-g/wal-g/  $GOPATH/src/wal-g \
     && cd $GOPATH/src/wal-g/ \
     && git checkout v$STACK_VERSION \

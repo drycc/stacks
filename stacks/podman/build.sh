@@ -37,9 +37,7 @@ EOF
     go-md2man \
     libapparmor-dev
   
-  install-stack go "${GO_VERSION}"
-  export GOPATH=/opt/drycc/go
-  export PATH=$GOPATH/bin:$PATH
+  install-stack go "${GO_VERSION}" && . init-stack
 
   curl -fsSL -o tmp.tar.gz https://github.com/containers/podman/archive/refs/tags/v${STACK_VERSION}.tar.gz
   tar -xzf tmp.tar.gz && rm tmp.tar.gz

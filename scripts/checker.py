@@ -325,6 +325,12 @@ repo_info_table = {
         "owner": "apache",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "flink": {
+        "name": "flink",
+        "type": "github",
+        "owner": "apache",
+        "match": "^release-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "opensearch": {
         "name": "OpenSearch",
         "type": "github",
@@ -342,6 +348,30 @@ repo_info_table = {
         "type": "github",
         "owner": "seaweedfs",
         "match": "^[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "statsd_exporter": {
+        "name": "statsd_exporter",
+        "type": "github",
+        "owner": "prometheus",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "kafka_exporter": {
+        "name": "kafka_exporter",
+        "type": "github",
+        "owner": "danielqsj",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "kafka": {
+        "name": "kafka",
+        "type": "github",
+        "owner": "apache",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "envoy": {
+        "name": "envoy",
+        "type": "github",
+        "owner": "envoyproxy",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
 }
 
@@ -441,7 +471,7 @@ def check_github_version(stack):
                 "%Y-%m-%dT%H:%M:%S"
             )
         if re.match(info["match"], tag["node"]["name"]):
-            if (datetime.utcnow() - date).days < 5:
+            if (datetime.utcnow() - date).days <= 7:
                 create_github_issue(stack, tag["node"]["name"])
             else:
                 break

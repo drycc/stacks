@@ -8,6 +8,8 @@ function build() {
   generate-stack-path
   install-stack go "${GO_VERSION}" && . init-stack
 
+  mkdir -p $GOPATH/src
+
   curl -sSL "https://github.com/vouch/vouch-proxy/archive/refs/tags/v${STACK_VERSION}.tar.gz" | tar -xz \
   && mv vouch-proxy-${STACK_VERSION} $GOPATH/src/vouch-proxy/ \
   && cd $GOPATH/src/vouch-proxy \

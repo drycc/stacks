@@ -7,12 +7,6 @@ from datetime import datetime
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
 
 repo_info_table = {
-    "airflow_exporter": {
-        "name": "airflow_exporter",
-        "type": "github",
-        "owner": "EamonZhang",
-        "match": "^v[2-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "alertmanager": {
         "name": "alertmanager",
         "type": "github",

@@ -367,6 +367,18 @@ repo_info_table = {
         "owner": "envoyproxy",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "mongodb": {
+        "name": "mongo",
+        "type": "github",
+        "owner": "mongodb",
+        "match": "^r[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "mongosh": {
+        "name": "mongosh",
+        "type": "github",
+        "owner": "mongodb-js",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
 }
 
 

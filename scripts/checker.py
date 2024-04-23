@@ -211,6 +211,12 @@ repo_info_table = {
         "owner": "redis",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "redis-cluster-proxy": {
+        "name": "redis-cluster-proxy",
+        "type": "github",
+        "owner": "drycc-addons",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "registry": {
         "name": "distribution",
         "type": "github",

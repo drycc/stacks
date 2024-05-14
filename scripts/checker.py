@@ -385,6 +385,12 @@ repo_info_table = {
         "owner": "mongodb-js",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "mongodb_exporter": {
+        "name": "mongodb_exporter",
+        "type": "github",
+        "owner": "percona",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "clickhouse": {
         "name": "ClickHouse",
         "type": "github",

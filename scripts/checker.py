@@ -67,6 +67,12 @@ repo_info_table = {
         "owner": "erlang",
         "match": "^OTP-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "etcd": {
+        "name": "etcd",
+        "type": "github",
+        "owner": "etcd-io",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "fluentd": {
         "name": "fluentd",
         "type": "github",

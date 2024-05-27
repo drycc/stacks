@@ -133,6 +133,18 @@ repo_info_table = {
         "owner": "stedolan",
         "match": "^jq-[0-9]{1,}\.[0-9]{1,}\.?[0-9]{0}$",
     },
+    "kvrocks": {
+        "name": "kvrocks",
+        "type": "github",
+        "owner": "apache",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "kvrocks_exporter": {
+        "name": "kvrocks_exporter",
+        "type": "github",
+        "owner": "RocksLabs",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "kubectl": {
         "name": "kubectl",
         "type": "github",

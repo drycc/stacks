@@ -7,6 +7,7 @@ alias gzip="gzip -n -9"
 . /etc/os-release
 export GO_VERSION=1.22
 export RUBY_VERSION=3.3
+export RUST_VERSION=1
 export STACK_NAME="${STACK_NAME:?name is required}"
 export STACK_VERSION="${STACK_VERSION:?version is required}"
 export OS_NAME="${OS_NAME:-linux}"

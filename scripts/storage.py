@@ -44,6 +44,12 @@ def upload_list(stack_name, dist_dir):
                             symlink(stack_name, symlink_version)
 
 
+def repair_symlink():
+    for stack_name, versions in symlink_table.items():
+        for version in versions:
+            symlink(stack_name, version)
+
+
 def symlink(stack_name, version):
     symlink_list = []
     object_list = [
@@ -63,6 +69,8 @@ if __name__ == "__main__":
     action = sys.argv[1]
     if action == "upload":
         upload_list(sys.argv[2], sys.argv[3])
+    elif action == "repair":
+        repair_symlink()
     elif action == "symlink":
         symlink(sys.argv[2], sys.argv[3])
     else:

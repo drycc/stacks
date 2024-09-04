@@ -2,7 +2,8 @@ import os
 import re
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
+
 
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
 
@@ -502,7 +503,8 @@ def check_github_version(stack):
     for tag in response.json()["data"]["repository"]["refs"]["edges"]:
         if "tagger" in tag["node"]["target"]:
             date = datetime.strptime(
-                tag["node"]["target"]["tagger"]["date"][:19], "%Y-%m-%dT%H:%M:%S")
+                tag["node"]["target"]["tagger"]["date"][:19], "%Y-%m-%dT%H:%M:%S"
+            ).astimezone(timezone.utc)
         else:
             date = datetime.strptime(
                 requests.get(
@@ -511,9 +513,9 @@ def check_github_version(stack):
                     ), headers=github_headers
                 ).json()["commit"]["author"]["date"][:19],
                 "%Y-%m-%dT%H:%M:%S"
-            )
+            ).astimezone(timezone.utc)
         if re.match(info["match"], tag["node"]["name"]):
-            if (datetime.utcnow() - date).days <= 7:
+            if (datetime.now(timezone.utc) - date).days <= 7:
                 create_github_issue(stack, tag["node"]["name"])
             else:
                 break

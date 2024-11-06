@@ -8,6 +8,24 @@ from datetime import datetime, timezone
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
 
 repo_info_table = {
+    "apollo-adminservice": {
+        "name": "apollo",
+        "type": "github",
+        "owner": "apolloconfig",
+        "match": "^v[1-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "apollo-config": {
+        "name": "apollo",
+        "type": "github",
+        "owner": "apolloconfig",
+        "match": "^v[1-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "apollo-portal": {
+        "name": "apollo",
+        "type": "github",
+        "owner": "apolloconfig",
+        "match": "^v[1-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "alertmanager": {
         "name": "alertmanager",
         "type": "github",
@@ -548,3 +566,4 @@ def main():
 
 if __name__ == "__main__":
    main()
+

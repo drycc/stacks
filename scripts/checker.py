@@ -254,6 +254,12 @@ repo_info_table = {
         "owner": "drycc-addons",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "valkey": {
+        "name": "valkey",
+        "type": "github",
+        "owner": "valkey-io",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "registry": {
         "name": "distribution",
         "type": "github",

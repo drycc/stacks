@@ -260,6 +260,12 @@ repo_info_table = {
         "owner": "valkey-io",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "valkey-sentinel-proxy": {
+        "name": "valkey-sentinel-proxy",
+        "type": "github",
+        "owner": "drycc-addons",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "registry": {
         "name": "distribution",
         "type": "github",

@@ -14,7 +14,7 @@ repo_info_table = {
         "owner": "apolloconfig",
         "match": "^v[1-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "apollo-config": {
+    "apollo-configservice": {
         "name": "apollo",
         "type": "github",
         "owner": "apolloconfig",

@@ -8,7 +8,7 @@ function build() {
   generate-stack-path
   BIN_DIR="${DATA_DIR}"/bin
   mkdir -p "${BIN_DIR}"
-  curl -fsSL -o "${BIN_DIR}"/"${STACK_NAME}" https://github.com/drycc-addons/redis-cluster-proxy/releases/download/v"${STACK_VERSION}"/"${STACK_NAME}"-linux."${OS_ARCH}"
+  curl -fsSL -o "${BIN_DIR}"/"${STACK_NAME}" https://github.com/drycc-addons/valkey-cluster-proxy/releases/download/v"${STACK_VERSION}"/"${STACK_NAME}"-linux."${OS_ARCH}"
   chmod +x "${BIN_DIR}"/"${STACK_NAME}"
 }
 

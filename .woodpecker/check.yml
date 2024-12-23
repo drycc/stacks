@@ -14,10 +14,13 @@ steps:
       -w "$(pwd)"
       registry.drycc.cc/drycc/python-dev
       python scripts/checker.py
-  secrets:
-  - github_token
-  - dev_registry
-  - drycc_registry
+  environment:
+    GITHUB_TOKEN:
+      from_secret: github_token
+    DEV_REGISTRY:
+      from_secret: dev_registry
+    DRYCC_REGISTRY:
+      from_secret: drycc_registry
   when:
     event:
     - cron

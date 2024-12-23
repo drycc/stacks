@@ -260,12 +260,6 @@ repo_info_table = {
         "owner": "drycc-addons",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "valkey-cluster-proxy": {
-        "name": "valkey-cluster-proxy",
-        "type": "github",
-        "owner": "drycc-addons",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "registry": {
         "name": "distribution",
         "type": "github",

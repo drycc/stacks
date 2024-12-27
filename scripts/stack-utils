@@ -5,7 +5,7 @@ shopt -s expand_aliases
 alias gzip="gzip -n -9"
 
 . /etc/os-release
-export GO_VERSION=1.22
+export GO_VERSION=1.23
 export RUBY_VERSION=3.3
 export RUST_VERSION=1
 export STACK_NAME="${STACK_NAME:?name is required}"

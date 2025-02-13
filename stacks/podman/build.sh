@@ -7,14 +7,12 @@
 function build() {
   generate-stack-path
   cat << EOF > "${TARNAME}"/meta/dependencies
-fuse-overlayfs
 iptables
-conmon
 uidmap
-slirp4netns
 EOF
 
   install-packages \
+    man \
     btrfs-progs \
     git \
     iptables \
@@ -35,16 +33,16 @@ EOF
     uidmap \
     conmon \
     go-md2man \
-    libapparmor-dev
+    libapparmor-dev \
+    protobuf-compiler
   
-  install-stack go "${GO_VERSION}" && . init-stack
+  install-stack go "${GO_VERSION}"
+  install-stack rust "${RUST_VERSION}"
+  . init-stack
 
   curl -fsSL -o tmp.tar.gz https://github.com/containers/podman/archive/refs/tags/v${STACK_VERSION}.tar.gz
   tar -xzf tmp.tar.gz && rm tmp.tar.gz
   cd podman-${STACK_VERSION}
-  
-
-  sed -i "s#/etc/containers#/opt/drycc/podman/etc/containers#g" `grep /etc/containers -rl .`
 
   PREFIX=/opt/drycc/podman make BUILDTAGS="seccomp"
   PREFIX=/opt/drycc/podman make install
@@ -55,33 +53,48 @@ EOF
   curl -L -o /opt/drycc/podman/bin/crun https://github.com/containers/crun/releases/download/${crun_version}/crun-${crun_version}-linux-${OS_ARCH}
   chmod +x /opt/drycc/podman/bin/crun
 
-  cni_version=$(curl -Ls https://github.com/containernetworking/plugins/releases|grep /containernetworking/plugins/releases/tag/ | sed -E 's/.*\/containernetworking\/plugins\/releases\/tag\/v([0-9\.]{1,}(-rc.[0-9]{1,})?)".*/\1/g' | head -1)
-  mkdir -p /opt/drycc/podman/opt/cni/bin
-  cd /opt/drycc/podman/opt/cni/bin
-  curl -fsSL -o tmp.tar.gz https://github.com/containernetworking/plugins/releases/download/v${cni_version}/cni-plugins-linux-${OS_ARCH}-v${cni_version}.tgz
-  tar -xzf tmp.tar.gz
-  rm tmp.tar.gz
-  cd -
+  # network
+  netavark_version=$(curl -Ls https://github.com/containers/netavark/releases|grep /containers/netavark/releases/tag/ | sed -E 's/.*\/containers\/netavark\/releases\/tag\/v([0-9\.]{1,}[0-9]{1,}?)".*/\1/g' | head -1)
+  git clone -b v${netavark_version} --dept=1 https://github.com/containers/netavark
+  cd netavark; make; cp ./bin/* /opt/drycc/podman/libexec/podman
+  cd -; rm -rf netavark
+
+  # slirp4netns
+  slirp4netns_version=$(curl -Ls https://github.com/rootless-containers/slirp4netns/releases|grep /rootless-containers/slirp4netns/releases/tag/ | sed -E 's/.*\/rootless-containers\/slirp4netns\/releases\/tag\/v([0-9\.]{1,}[0-9]{1,}?)".*/\1/g' | head -1)
+  curl -o /opt/drycc/podman/libexec/podman/slirp4netns --fail -L https://github.com/rootless-containers/slirp4netns/releases/download/v${slirp4netns_version}/slirp4netns-$(uname -m)
+  chmod +x /opt/drycc/podman/libexec/podman/slirp4netns
+
+  # fuse-overlayfs
+  fuse_overlayfs_version=$(curl -Ls https://github.com/containers/fuse-overlayfs/releases|grep /containers/fuse-overlayfs/releases/tag/ | sed -E 's/.*\/containers\/fuse-overlayfs\/releases\/tag\/v([0-9\.]{1,}[0-9]{1,}?)".*/\1/g' | head -1)
+  curl -o /opt/drycc/podman/libexec/podman/fuse-overlayfs --fail -L https://github.com/containers/fuse-overlayfs/releases/download/v${fuse_overlayfs_version}/fuse-overlayfs-$(uname -m)
+  chmod +x /opt/drycc/podman/libexec/podman/fuse-overlayfs
+
+  # conmon
+  conmon_version=$(curl -Ls https://github.com/containers/conmon/releases|grep /containers/conmon/releases/tag/ | sed -E 's/.*\/containers\/conmon\/releases\/tag\/v([0-9\.]{1,}[0-9]{1,}?)".*/\1/g' | head -1)
+  curl -o /opt/drycc/podman/libexec/podman/conmon --fail -L https://github.com/containers/conmon/releases/download/v${conmon_version}/conmon.$(dpkg --print-architecture)
+  chmod +x /opt/drycc/podman/libexec/podman/conmon
 
   chmod +x /opt/drycc/podman/bin/podman
   mkdir -p /opt/drycc/podman/etc/containers
   mkdir -p /opt/drycc/podman/run/containers/storage
   mkdir -p /opt/drycc/podman/var/lib/containers/storage
   mkdir -p /opt/drycc/podman/var/lib/shared
-  mkdir -p /opt/drycc/podman/etc/cni/net.d
+  mkdir -p /opt/drycc/podman/etc/netavark/net.d
 
   cat << EOF > "/opt/drycc/podman/etc/containers/storage.conf"
 [storage]
 driver = "overlay"
 runroot = "/opt/drycc/podman/run/containers/storage"
 graphroot = "/opt/drycc/podman/var/lib/containers/storage"
+
 [storage.options]
 additionalimagestores = [
-"/opt/drycc/podman/var/lib/shared",
+  "/opt/drycc/podman/var/lib/shared",
 ]
+
 [storage.options.overlay]
 ignore_chown_errors = "true"
-mount_program = "/usr/bin/fuse-overlayfs"
+mount_program = "/opt/drycc/podman/libexec/podman/fuse-overlayfs"
 mountopt = "nodev,fsync=0"
 EOF
 
@@ -90,17 +103,48 @@ EOF
 netns="private"
 
 [network]
-cni_plugin_dir="/opt/drycc/podman/opt/cni"
-network_config_dir="/opt/drycc/podman/etc/cni/net.d/"
+network_config_dir="/opt/drycc/podman/etc/netavark/net.d/"
 default_network="podman"
+default_rootless_network_cmd="slirp4netns"
 
 [engine]
 runtime="/opt/drycc/podman/bin/crun"
+conmon_path=[
+  "/opt/drycc/podman/libexec/podman/conmon",
+]
+helper_binaries_dir=[
+  "/opt/drycc/podman/libexec/podman",
+]
+EOF
+  
+  cat << EOF > "/opt/drycc/podman/etc/containers/policy.json"
+{
+    "default": [
+        {
+            "type": "insecureAcceptAnything"
+        }
+    ]
+}
 EOF
 
-  curl -L -o /opt/drycc/podman/etc/containers/registries.conf https://src.fedoraproject.org/rpms/containers-common/raw/main/f/registries.conf
-  curl -L -o /opt/drycc/podman/etc/containers/policy.json https://src.fedoraproject.org/rpms/containers-common/raw/main/f/default-policy.json
+  cat << EOF > "/opt/drycc/podman/etc/containers/registries.conf"
+unqualified-search-registries = ["docker.io"]
+EOF
+
+  mkdir -p /opt/drycc/podman/profile.d
+  cat << EOF > /opt/drycc/podman/profile.d/config.sh
+if [[ "\$(id -u)" = "0" ]]; then
+    PODMAN_CONFIG_DIR=/etc/containers
+else
+    PODMAN_CONFIG_DIR=\${HOME}/.config/containers
+fi
+rm -rf "\${PODMAN_CONFIG_DIR}"
+mkdir -p "\${PODMAN_CONFIG_DIR}"
+cp /opt/drycc/podman/etc/containers/* "\${PODMAN_CONFIG_DIR}"
+EOF
+
   cp -rf /opt/drycc/podman/* ${DATA_DIR}
+
 }
 
 # call build stack

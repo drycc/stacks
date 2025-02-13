@@ -2,11 +2,30 @@ import os
 import re
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
+
 
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
 
 repo_info_table = {
+    "apollo-adminservice": {
+        "name": "apollo",
+        "type": "github",
+        "owner": "apolloconfig",
+        "match": "^v[1-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "apollo-configservice": {
+        "name": "apollo",
+        "type": "github",
+        "owner": "apolloconfig",
+        "match": "^v[1-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "apollo-portal": {
+        "name": "apollo",
+        "type": "github",
+        "owner": "apolloconfig",
+        "match": "^v[1-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "alertmanager": {
         "name": "alertmanager",
         "type": "github",
@@ -67,6 +86,12 @@ repo_info_table = {
         "owner": "erlang",
         "match": "^OTP-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "etcd": {
+        "name": "etcd",
+        "type": "github",
+        "owner": "etcd-io",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "fluentd": {
         "name": "fluentd",
         "type": "github",
@@ -126,6 +151,18 @@ repo_info_table = {
         "type": "github",
         "owner": "stedolan",
         "match": "^jq-[0-9]{1,}\.[0-9]{1,}\.?[0-9]{0}$",
+    },
+    "kvrocks": {
+        "name": "kvrocks",
+        "type": "github",
+        "owner": "apache",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "kvrocks_exporter": {
+        "name": "kvrocks_exporter",
+        "type": "github",
+        "owner": "RocksLabs",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "kubectl": {
         "name": "kubectl",
@@ -211,8 +248,14 @@ repo_info_table = {
         "owner": "redis",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "redis-cluster-proxy": {
-        "name": "redis-cluster-proxy",
+    "valkey": {
+        "name": "valkey",
+        "type": "github",
+        "owner": "valkey-io",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "valkey-sentinel-proxy": {
+        "name": "valkey-sentinel-proxy",
         "type": "github",
         "owner": "drycc-addons",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
@@ -484,7 +527,8 @@ def check_github_version(stack):
     for tag in response.json()["data"]["repository"]["refs"]["edges"]:
         if "tagger" in tag["node"]["target"]:
             date = datetime.strptime(
-                tag["node"]["target"]["tagger"]["date"][:19], "%Y-%m-%dT%H:%M:%S")
+                tag["node"]["target"]["tagger"]["date"][:19], "%Y-%m-%dT%H:%M:%S"
+            ).astimezone(timezone.utc)
         else:
             date = datetime.strptime(
                 requests.get(
@@ -493,9 +537,9 @@ def check_github_version(stack):
                     ), headers=github_headers
                 ).json()["commit"]["author"]["date"][:19],
                 "%Y-%m-%dT%H:%M:%S"
-            )
+            ).astimezone(timezone.utc)
         if re.match(info["match"], tag["node"]["name"]):
-            if (datetime.utcnow() - date).days <= 7:
+            if (datetime.now(timezone.utc) - date).days <= 7:
                 create_github_issue(stack, tag["node"]["name"])
             else:
                 break
@@ -528,3 +572,4 @@ def main():
 
 if __name__ == "__main__":
    main()
+

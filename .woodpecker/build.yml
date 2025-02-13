@@ -12,12 +12,17 @@ steps:
   image: bash
   commands:
   - ./build.sh all $CI_COMMIT_TAG
-  secrets:
-  - codename
-  - oss_endpoint
-  - oss_access_key_id
-  - oss_access_key_secret
-  - container_pull_secrets
+  environment:
+    CODENAME:
+      from_secret: codename
+    OSS_ENDPOINT:
+      from_secret: oss_endpoint
+    OSS_ACCESS_KEY_ID:
+      from_secret: oss_access_key_id
+    OSS_ACCESS_KEY_SECRET:
+      from_secret: oss_access_key_secret
+    CONTAINER_PULL_SECRETS:
+      from_secret: container_pull_secrets
   when:
     event:
     - tag

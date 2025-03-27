@@ -446,6 +446,12 @@ repo_info_table = {
         "owner": "projectnessie",
         "match": "^nessie-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "lakefs": {
+        "name": "lakefs",
+        "type": "github",
+        "owner": "treeverse",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
 }
 
 

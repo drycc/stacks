@@ -24,3 +24,5 @@ steps:
   when:
     event:
     - cron
+    - push
+    - tag

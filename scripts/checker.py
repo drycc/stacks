@@ -77,7 +77,7 @@ repo_info_table = {
     "envtpl": {
         "name": "envtpl",
         "type": "github",
-        "owner": "subfuzion",
+        "owner": "duanhongyi",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "erlang": {

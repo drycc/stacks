@@ -9,7 +9,7 @@ function build() {
   install-stack go "${GO_VERSION}" && . init-stack
   mkdir -p $GOPATH/src
 
-  curl -sSL "https://github.com/subfuzion/envtpl/archive/refs/tags/v${STACK_VERSION}.tar.gz" | tar -xz \
+  curl -sSL "https://github.com/duanhongyi/envtpl/archive/refs/tags/v${STACK_VERSION}.tar.gz" | tar -xz \
   && mv envtpl-${STACK_VERSION} $GOPATH/src/envtpl/ \
   && cd $GOPATH/src/envtpl \
   && export GO111MODULE=on \

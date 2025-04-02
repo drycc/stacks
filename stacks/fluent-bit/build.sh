@@ -16,7 +16,7 @@ function build() {
     && cd $GOPATH/src/fluent-bit/build \
     && apt update \
     && apt install -yq flex bison libyaml-dev libssl-dev libsasl2-dev \
-    && cmake -DFLB_ALL=Yes -DCMAKE_INSTALL_PREFIX=/opt/drycc/fluent-bit ../ \
+    && cmake -DFLB_ALL=Yes -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_INSTALL_PREFIX=/opt/drycc/fluent-bit ../ \
     && make \
     && make install
   cp -rf /opt/drycc/fluent-bit/* "${DATA_DIR}"

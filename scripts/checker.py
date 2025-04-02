@@ -452,6 +452,12 @@ repo_info_table = {
         "owner": "treeverse",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "fluent-bit-manager": {
+        "name": "fluent-bit-manager",
+        "type": "github",
+        "owner": "drycc-addons",
+        "match": "v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
 }
 
 
@@ -584,4 +590,3 @@ def main():
 
 if __name__ == "__main__":
    main()
-

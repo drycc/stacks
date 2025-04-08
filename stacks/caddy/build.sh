@@ -8,10 +8,17 @@ function build() {
   generate-stack-path
   BIN_DIR="${DATA_DIR}"/bin
   mkdir -p "${BIN_DIR}"
-  curl -fsSL -o tmp.tar.gz https://github.com/caddyserver/caddy/releases/download/v${STACK_VERSION}/caddy_${STACK_VERSION}_linux_${OS_ARCH}.tar.gz
-  tar -xzf tmp.tar.gz
-  mv caddy "${BIN_DIR}"
-  rm LICENSE README.md tmp.tar.gz
+  install-stack go "${GO_VERSION}"
+  . init-stack
+  curl -fsSL -o tmp.tar.gz https://github.com/caddyserver/caddy/archive/refs/tags/v${STACK_VERSION}.tar.gz
+  tar -xvzf tmp.tar.gz
+  cd caddy-${STACK_VERSION}
+  # fix CVE-2022-28948
+  go get -u ./...; go mod tidy; go mod vendor
+
+  go build -o "${BIN_DIR}"/"${STACK_NAME}"
+  cd ..
+  rm -rf caddy-${STACK_VERSION} tmp.tar.gz
 }
 
 # call build stack

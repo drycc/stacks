@@ -16,7 +16,7 @@ function build() {
   # fix CVE-2022-28948
   go get -u ./...; go mod tidy; go mod vendor
 
-  go build -o "${BIN_DIR}"/"${STACK_NAME}"
+  go build -o "${BIN_DIR}"/"${STACK_NAME}" cmd/caddy/main.go
   cd ..
   rm -rf caddy-${STACK_VERSION} tmp.tar.gz
 }

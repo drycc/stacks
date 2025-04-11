@@ -6,14 +6,19 @@
 # Implement build function
 function build() {
   generate-stack-path
-  if [[ "${OS_ARCH}" == "amd64" ]]; then
-    pack_download_url="https://github.com/buildpacks/pack/releases/download/v${STACK_VERSION}/pack-v${STACK_VERSION}-linux.tgz"
-  else
-    pack_download_url="https://github.com/buildpacks/pack/releases/download/v${STACK_VERSION}/pack-v${STACK_VERSION}-linux-${OS_ARCH}.tgz"
-  fi
   BIN_DIR="${DATA_DIR}"/bin
   mkdir -p "${BIN_DIR}"
-  curl -sSL "${pack_download_url}" | tar xvz -C "${BIN_DIR}"
+  install-stack go "${GO_VERSION}"
+  . init-stack
+  curl -fsSL -o tmp.tar.gz https://github.com/buildpacks/pack/archive/refs/tags/v${STACK_VERSION}.tar.gz
+  tar -xvzf tmp.tar.gz
+  cd pack-${STACK_VERSION}
+  # fix CVE-2022-28948
+  go get -u ./...; go mod tidy; go mod vendor
+
+  go build -o "${BIN_DIR}"/"${STACK_NAME}"
+  cd ..
+  rm -rf pack-${STACK_VERSION} tmp.tar.gz
 }
 
 # call build stack

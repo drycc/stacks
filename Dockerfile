@@ -26,6 +26,7 @@ RUN install-packages \
 		file \
 		g++ \
 		gcc \
+		clang \
 		imagemagick \
 		libbz2-dev \
 		libc6-dev \

@@ -11,9 +11,12 @@ function build() {
 
   curl -sSL "https://github.com/subfuzion/envtpl/archive/refs/tags/v${STACK_VERSION}.tar.gz" | tar -xz \
   && mv envtpl-${STACK_VERSION} $GOPATH/src/envtpl/ \
-  && cd $GOPATH/src/envtpl \
-  && export GO111MODULE=on \
-  && CGO_ENABLED=0 go build \
+  && cd $GOPATH/src/envtpl
+  # fix CVE-2022-28948
+  go get -u ./...; go mod tidy; go mod vendor
+
+  export GO111MODULE=on
+  CGO_ENABLED=0 go build \
     -ldflags "-X main.AppVersionMetadata=$(date -u +%s)" \
     -a -installsuffix cgo -o /bin/envtpl ./cmd/envtpl/.
 

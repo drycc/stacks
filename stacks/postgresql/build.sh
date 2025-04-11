@@ -5,6 +5,8 @@
 POSTGIS_VERSION=$(curl -Ls https://github.com/postgis/postgis/tags|grep /postgis/postgis/releases/tag/ | sed -E 's/.*\/postgis\/postgis\/releases\/tag\/([0-9\.]{1,}(-rc.[0-9]{1,})?)".*/\1/g' | head -1)
 TIMESCALE_VERSION=$(curl -Ls https://github.com/timescale/timescaledb/releases|grep /timescale/timescaledb/releases/tag/ | sed -E 's/.*\/timescale\/timescaledb\/releases\/tag\/([0-9\.]{1,})".*/\1/g' | head -1)
 PGVECTOR_VERSION=$(curl -Ls https://github.com/pgvector/pgvector/tags | grep '/pgvector/pgvector/archive/refs/tags/' | sed -E 's|.*/tags/v([0-9]+\.[0-9]+\.[0-9]+).*|\1|' | sort -Vr | head -1)
+PG_REPACK_VERSION=$(curl -Ls https://github.com/reorg/pg_repack/tags | grep '/pg_repack/archive/refs/tags/' | sed -E 's|.*/tags/ver_([0-9]+\.[0-9]+\.[0-9]+).*|\1|' | sort -Vr | head -1)
+
 # Implement build function
 function build() {
   # Generate binary
@@ -41,7 +43,7 @@ function build() {
     libproj-dev \
     libprotobuf-c-dev \
     protobuf-c-compiler
-
+  echo "-----------------start buid postpostgres-------------"
   # postgresql
   curl -sSL "https://ftp.postgresql.org/pub/source/v${PG_VER}/postgresql-${PG_VER}.tar.gz" | tar -xz && \
   cd postgresql-"${PG_VER}" && \
@@ -73,7 +75,7 @@ function build() {
     # we can change from world to world-bin in newer releases
     make world && \
     make install-world
-
+  cd - 
   # postgis
   echo "-----------------start buid postgis-------------"
   curl -sSL "https://download.osgeo.org/postgis/source/postgis-${POSTGIS_VERSION}.tar.gz" | tar -xz && \
@@ -101,11 +103,22 @@ function build() {
   echo "-----------------start buid vector-------------"
   export PG_CONFIG=/opt/drycc/postgresql/"${PG_MAJOR}"/bin/pg_config
   curl -sSL https://codeload.github.com/pgvector/pgvector/tar.gz/refs/tags/v${PGVECTOR_VERSION} | tar -xz &&
-  cd pgvector-${PGVECTOR_VERSION}/
+  cd pgvector-${PGVECTOR_VERSION} && \
   make && \
   make install && \
-  cd - 
-  rm -rf pgvector-${PGVECTOR_VERSION}/
+  cd - && \
+  rm -rf pgvector-${PGVECTOR_VERSION}
+
+
+# pg_repack
+  echo "-----------------start buid pg_repack-------------"
+  export PG_CONFIG=/opt/drycc/postgresql/"${PG_MAJOR}"/bin/pg_config
+  curl -sSL https://github.com/reorg/pg_repack/archive/refs/tags/ver_${PG_REPACK_VERSION}.tar.gz | tar -xz &&
+  cd pg_repack-ver_${PG_REPACK_VERSION} && \
+  make && \
+  make install && \
+  cd - && \
+  rm -rf pg_repack-ver-${PG_REPACK_VERSION}
 
   cat  << EOF > "${PROFILE_DIR}/${STACK_NAME}.sh"
 export PATH="/opt/drycc/postgresql/$PG_MAJOR/bin:\$PATH"
@@ -115,7 +128,6 @@ EOF
   cp -rf /opt/drycc/postgresql/* "${DATA_DIR}"
   cd /workspace && rm -rf "postgresql-${PG_VER}"
 }
-
 
 # call build stack
 build-stack "${1}"

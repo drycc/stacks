@@ -14,13 +14,13 @@ bucket = oss2.Bucket(
 )
 
 symlink_table = {
-    "go": ["1.16", "1.17", "1.18", "1.19", "1.20", "1.21", "1.22", "1.23", "1.24"],
-    "java": ["8", "11", "17", "18", "19", "20", "21", "22", "23", "24"],
-    "node": ["12", "14", "16", "17", "18", "19", "20", "21", "22", "23"],
-    "php": ["7.3", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4"],
-    "python": ["2.7", "3.7", "3.8", "3.9", "3.10", "3.11", "3.12", "3.13"],
-    "ruby": ["2.6", "3.7", "3.0", "3.1", "3.2", "3.3", "3.4"],
-    "rust": ["1"],
+    "go": "[0-9]{1,}.[0-9]{1,}",
+    "java": "[0-9]{1,}",
+    "node": "[0-9]{1,}",
+    "php": "[0-9]{1,}.[0-9]{1,}",
+    "python": "[0-9]{1,}.[0-9]{1,}",
+    "ruby": "[0-9]{1,}.[0-9]{1,}",
+    "rust": "[0-9]{1,}",
 }
 
 
@@ -32,22 +32,19 @@ def upload(filename, filepath):
 
 def upload_list(stack_name, dist_dir):
     for root, _, files in os.walk(os.path.join(dist_dir, stack_name)):
-        for _filename in  files:
+        for _filename in files:
             if _filename.startswith(stack_name) and _filename.endswith(".tar.gz"):
                 filename = os.path.join("stacks", stack_name, _filename)
                 filepath = os.path.join(root, _filename)
                 upload(filename, filepath)
                 if stack_name in symlink_table:
-                    for symlink_version in symlink_table[stack_name]:
-                        prefix = f"stacks/{stack_name}/{stack_name}-{symlink_version}"
-                        if filename.startswith(prefix):
-                            symlink(stack_name, symlink_version)
-
-
-def repair_symlink():
-    for stack_name, versions in symlink_table.items():
-        for version in versions:
-            symlink(stack_name, version)
+                    version_regex = symlink_table[stack_name]
+                    prefix = f"stacks/{stack_name}/{stack_name}-"
+                    version = filename.replace(prefix, "").split("-")[0]
+                    symlink_version = re.search(version_regex, version).group()
+                    prefix += symlink_version
+                    if filename.startswith(prefix):
+                        symlink(stack_name, symlink_version)
 
 
 def symlink(stack_name, version):
@@ -69,8 +66,6 @@ if __name__ == "__main__":
     action = sys.argv[1]
     if action == "upload":
         upload_list(sys.argv[2], sys.argv[3])
-    elif action == "repair":
-        repair_symlink()
     elif action == "symlink":
         symlink(sys.argv[2], sys.argv[3])
     else:

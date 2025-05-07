@@ -170,12 +170,6 @@ repo_info_table = {
         "owner": "kubernetes",
         "match": "^kubernetes-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "mariadb": {
-        "name": "server",
-        "type": "github",
-        "owner": "MariaDB",
-        "match": "^mariadb-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "mc": {
         "name": "mc",
         "type": "github",

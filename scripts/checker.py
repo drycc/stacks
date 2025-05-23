@@ -446,6 +446,12 @@ repo_info_table = {
         "owner": "treeverse",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "victoriametrics": {
+        "name": "victoriametrics",
+        "type": "github",
+        "owner": "victoriametrics",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "fluent-bit-manager": {
         "name": "fluent-bit-manager",
         "type": "github",

@@ -73,6 +73,52 @@ function renew() {
   git push --tag
 }
 
+function patch() {
+    # Validate arguments
+    if [[ $# -ne 3 ]]; then
+        echo "Usage: ${FUNCNAME[0]} <tar.gz> <inner_file> <replacement>" >&2
+        return 1
+    fi
+    local tar_file="$1"
+    local inner_file="$2"
+    local replacement_file="$3"
+    # Check if files exist
+    if [[ ! -f "$tar_file" ]]; then
+        echo "Error: Tar file '$tar_file' not found" >&2
+        return 1
+    fi
+    if [[ ! -f "$replacement_file" ]]; then
+        echo "Error: Replacement file '$replacement_file' not found" >&2
+        return 1
+    fi
+    # Create temporary directory
+    local temp_dir
+    temp_dir=$(mktemp -d) || {
+        echo "Error: Failed to create temporary directory" >&2
+        return 1
+    }
+    trap "rm -rf '$temp_dir'" EXIT
+    # Extract tar file
+    if ! tar -xzf "$tar_file" -C "$temp_dir" 2>/dev/null; then
+        echo "Error: Failed to extract '$tar_file'" >&2
+        return 1
+    fi
+    # Check if inner file exists in archive
+    if [[ ! -f "${temp_dir}/${inner_file}" ]]; then
+        echo "Error: File '$inner_file' not found in archive" >&2
+        return 1
+    fi
+    # Replace the file
+    if ! cp "$replacement_file" "${temp_dir}/${inner_file}"; then
+        echo "Error: Failed to replace file" >&2
+        return 1
+    fi
+
+    tar --numeric-owner -czf "${tar_file: :-7}.patched.tar.gz" -C "$temp_dir" . --transform='s,^./,,'
+    echo "Success: File replaced in '$tar_file'"
+    return 0
+}
+
 function clean-tags() {
   for tag in $(git tag --sort creatordate|head -n "$1")
   do

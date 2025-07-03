@@ -224,6 +224,12 @@ repo_info_table = {
         "owner": "python",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "quickwit": {
+        "name": "quickwit",
+        "type": "github",
+        "owner": "quickwit-oss",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "rabbitmq": {
         "name": "rabbitmq-server",
         "type": "github",

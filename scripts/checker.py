@@ -38,12 +38,6 @@ repo_info_table = {
         "owner": "dbeaver",
         "match": "[2-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "vouch-proxy": {
-        "name": "vouch-proxy",
-        "type": "github",
-        "owner": "vouch",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "redis_exporter": {
         "name": "redis_exporter",
         "type": "github",

@@ -73,4 +73,4 @@ RUN UPX_VERSION=4.1.0; \
   tar -Jxvf upx-${UPX_VERSION}-${OS_ARCH}_linux.tar.xz; \
   cp upx-${UPX_VERSION}-${OS_ARCH}_linux/upx /usr/local/bin; \
   rm -rf upx-*; \
-  pip install oss2;
+  pip install oss2 packaging;

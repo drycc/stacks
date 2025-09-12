@@ -30,7 +30,7 @@ repo_info_table = {
         "name": "alertmanager",
         "type": "github",
         "owner": "prometheus",
-        "match": "^v[2-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "cloudbeaver": {
         "name": "cloudbeaver",

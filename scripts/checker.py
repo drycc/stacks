@@ -55,7 +55,7 @@ repo_info_table = {
         "type": "github",
         "owner": "prometheus-community",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },  
+    },
     "jmx_exporter": {
         "name": "jmx_exporter",
         "type": "github",
@@ -66,12 +66,6 @@ repo_info_table = {
         "name": "caddy",
         "type": "github",
         "owner": "caddyserver",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
-    "envtpl": {
-        "name": "envtpl",
-        "type": "github",
-        "owner": "duanhongyi",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "erlang": {
@@ -469,7 +463,7 @@ repo_info_table = {
 
 def create_github_tag(stack, tag_name):
     sha = requests.get(
-        "https://api.github.com/repos/drycc/stacks/git/trees/main", 
+        "https://api.github.com/repos/drycc/stacks/git/trees/main",
         headers=github_headers,
     ).json()["sha"]
     response = requests.post(

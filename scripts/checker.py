@@ -38,12 +38,6 @@ repo_info_table = {
         "owner": "dbeaver",
         "match": "[2-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "vouch-proxy": {
-        "name": "vouch-proxy",
-        "type": "github",
-        "owner": "vouch",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "redis_exporter": {
         "name": "redis_exporter",
         "type": "github",
@@ -224,6 +218,12 @@ repo_info_table = {
         "owner": "python",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "quickwit": {
+        "name": "quickwit",
+        "type": "github",
+        "owner": "quickwit-oss",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "rabbitmq": {
         "name": "rabbitmq-server",
         "type": "github",
@@ -379,6 +379,12 @@ repo_info_table = {
         "type": "github",
         "owner": "opensearch-project",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
+    "opentelemetry-collector": {
+        "name": "opentelemetry-collector",
+        "type": "github",
+        "owner": "open-telemetry",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "seaweedfs": {
         "name": "seaweedfs",

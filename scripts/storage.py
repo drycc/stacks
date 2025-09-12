@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import oss2
+from packaging.version import parse
 
 
 bucket = oss2.Bucket(
@@ -48,18 +49,20 @@ def upload_list(stack_name, dist_dir):
 
 
 def symlink(stack_name, version):
-    symlink_list = []
     object_list = [
         obj.key for obj in bucket.list_objects(
             f"stacks/{stack_name}/{stack_name}-{version}.").object_list
     ]
-    object_list.sort(reverse=True)
+    prefix = f"stacks/{stack_name}/{stack_name}-"
+    version_list = sorted(
+        [obj.replace(prefix, "").split("-", 1)[0] for obj in object_list],
+        key=parse,
+        reverse=True,
+    )
     for obj in object_list:
-        name = f"stacks/{stack_name}/{stack_name}-{version}"
-        symlink = re.sub("%s.([0-9]\.?){1,}" % name, name, obj)
-        if symlink != obj and symlink not in symlink_list:
+        if obj.startswith(f"{prefix}{version_list[0]}-"):
+            symlink = re.sub("%s.([0-9]\.?){1,}" % f"{prefix}{version}", f"{prefix}{version}", obj)
             bucket.put_symlink(obj, symlink)
-            symlink_list.append(symlink)
 
 
 if __name__ == "__main__":

@@ -42,7 +42,9 @@ function build() {
     libjson-c-dev \
     libproj-dev \
     libprotobuf-c-dev \
-    protobuf-c-compiler
+    protobuf-c-compiler \
+    bison \
+    flex 
   echo "-----------------start buid postpostgres-------------"
   # postgresql
   curl -sSL "https://ftp.postgresql.org/pub/source/v${PG_VER}/postgresql-${PG_VER}.tar.gz" | tar -xz && \
@@ -50,15 +52,12 @@ function build() {
     ./configure \
     --prefix=/opt/drycc/postgresql/"${PG_MAJOR}" \
     --enable-integer-datetimes \
-    --enable-thread-safety \
     --enable-tap-tests \
     --with-uuid=e2fs \
-    --with-gnu-ld \
     --with-pgport=5432 \
     --with-system-tzdata=/usr/share/zoneinfo \
     --with-includes=/usr/local/include \
     --with-libraries=/usr/local/lib \
-    --with-krb5 \
     --with-gssapi \
     --with-ldap \
     --with-pam \
@@ -73,16 +72,14 @@ function build() {
     --with-lz4 \
     && \
     # we can change from world to world-bin in newer releases
-    make world && \
-    make install-world
+    make world-bin && \
+    make install-world-bin
   cd - 
   # postgis
   echo "-----------------start buid postgis-------------"
   curl -sSL "https://download.osgeo.org/postgis/source/postgis-${POSTGIS_VERSION}.tar.gz" | tar -xz && \
   cd postgis-"${POSTGIS_VERSION}" && \
-    ./configure \
-    --prefix="/opt/drycc/postgresql/${PG_MAJOR}/postgis/${POSTGIS_VERSION}" \
-    --with-pgconfig=/opt/drycc/postgresql/"${PG_MAJOR}"/bin/pg_config \
+    ./configure --with-pgconfig=/opt/drycc/postgresql/"${PG_MAJOR}"/bin/pg_config \
     && \
   make && \
   make install && \

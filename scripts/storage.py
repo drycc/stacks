@@ -61,7 +61,7 @@ def symlink(stack_name, version):
     )
     for obj in object_list:
         if obj.startswith(f"{prefix}{version_list[0]}-"):
-            symlink = re.sub("%s.([0-9]\.?){1,}" % f"{prefix}{version}", f"{prefix}{version}", obj)
+            symlink = re.sub(r"%s.([0-9]\.?){1,}" % f"{prefix}{version}", f"{prefix}{version}", obj)
             bucket.put_symlink(obj, symlink)
 
 

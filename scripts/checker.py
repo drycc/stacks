@@ -224,6 +224,12 @@ repo_info_table = {
         "owner": "rabbitmq",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "rclone": {
+        "name": "rclone",
+        "type": "github",
+        "owner": "rclone",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "redis": {
         "name": "redis",
         "type": "github",

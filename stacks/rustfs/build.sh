@@ -14,6 +14,7 @@ function build() {
     && rm rustfs.zip
 
   chmod +x "${BIN_DIR}"/"${STACK_NAME}"
+  upx --lzma --best "${BIN_DIR}"/*
 }
 
 # call build stack

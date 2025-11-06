@@ -69,7 +69,7 @@ ENV PATH "/usr/local/python/bin:${PATH}"
 
 ADD requirements.txt /tmp/requirements.txt
 
-RUN UPX_VERSION=4.1.0; \
+RUN UPX_VERSION=5.0.2; \
   OS_ARCH=$(dpkg --print-architecture); \
   wget https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-${OS_ARCH}_linux.tar.xz; \
   tar -Jxvf upx-${UPX_VERSION}-${OS_ARCH}_linux.tar.xz; \

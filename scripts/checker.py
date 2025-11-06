@@ -386,6 +386,12 @@ repo_info_table = {
         "owner": "rustfs",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "opentelemetry-collector": {
+        "name": "opentelemetry-collector-releases",
+        "type": "github",
+        "owner": "open-telemetry",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "seaweedfs": {
         "name": "seaweedfs",
         "type": "github",

@@ -380,6 +380,12 @@ repo_info_table = {
         "owner": "opensearch-project",
         "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "rustfs": {
+        "name": "rustfs",
+        "type": "github",
+        "owner": "rustfs",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "seaweedfs": {
         "name": "seaweedfs",
         "type": "github",

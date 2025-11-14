@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Git Repository Cleaner
+Git Repository Cleaner and OSS Stack Cleaner
 
-This script provides various cleanup operations for git repositories and GitHub issues.
+This script provides various cleanup operations for git repositories, GitHub issues,
+and OSS stack files.
 
 Usage:
     python cleaner.py tags -n 3 [--dry-run] [--confirm]
     python cleaner.py issues --max-issues 100 [--dry-run]
+    python cleaner.py oss-stacks -n 3 [--dry-run]
 """
 
 import argparse
@@ -14,8 +16,11 @@ import subprocess
 import sys
 import os
 import requests
+import oss2
+import re
 from collections import defaultdict
 from typing import List, Dict, Tuple
+from packaging import version
 
 
 def run_command(command: List[str], dry_run: bool = False) -> str:
@@ -286,6 +291,164 @@ def _close_issue(issue_number: int, issue_title: str, headers: Dict[str, str]) -
         print(f"Error closing issue #{issue_number}: {e}")
 
 
+def parse_oss_filename(filename: str) -> Tuple[str, str, str]:
+    s0, s1 = filename.split("/")[-1].split("-linux-")
+    def parse_version(full_name):
+        parts = full_name.split('-')
+        for i in range(len(parts)):
+            potential_version = '-'.join(parts[i:])
+            try:
+                version.parse(potential_version)
+                software_name = '-'.join(parts[:i]) if i > 0 else None
+                return software_name, potential_version
+            except version.InvalidVersion:
+                continue
+        raise ValueError(f"Could not parse version from {full_name}")
+    os_name = s1.rstrip('.tar.gz')
+    stack_name, stack_version = parse_version(s0)
+    return stack_name, stack_version, os_name
+
+
+def clean_oss_stacks(args):
+    """Clean up old OSS stack files, keeping only the latest n versions per stack per OS."""
+    # Initialize OSS bucket
+    try:
+        bucket = oss2.Bucket(
+            oss2.Auth(
+                os.environ.get("OSS_ACCESS_KEY_ID"),
+                os.environ.get("OSS_ACCESS_KEY_SECRET"),
+            ),
+            os.environ.get("OSS_ENDPOINT", "http://oss-accelerate.aliyuncs.com"),
+            'drycc'
+        )
+    except Exception as e:
+        print(f"Error initializing OSS bucket: {e}")
+        sys.exit(1)
+
+    # List all objects in the stacks directory
+    print("Listing OSS objects...")
+    object_keys = []
+    try:
+        for obj in oss2.ObjectIterator(bucket, prefix='stacks/'):
+            if obj.key.endswith('.tar.gz'):
+                object_keys.append(obj.key)
+    except Exception as e:
+        print(f"Error listing OSS objects: {e}")
+        sys.exit(1)
+
+    if not object_keys:
+        print("No stack files found in OSS")
+        return
+
+    print(f"Found {len(object_keys)} stack files")
+
+    # Handle suffix-based deletion
+    if hasattr(args, 'subfix') and args.subfix is not None:
+        print(f"OSS Stack Cleaner - Deleting files with suffix: {args.subfix}")
+        
+        # Find files matching the suffix
+        files_to_delete = []
+        for obj_key in object_keys:
+            # Check if the filename ends with the specified suffix
+            filename = obj_key.split('/')[-1]  # Get just the filename part
+            if filename.endswith(args.subfix):
+                files_to_delete.append(obj_key)
+        
+        if not files_to_delete:
+            print(f"No files found matching suffix: {args.subfix}")
+            return
+
+        print(f"\nFound {len(files_to_delete)} files to delete:")
+        for obj_key in sorted(files_to_delete):
+            print(f"  - {obj_key}")
+
+        # Confirm deletion
+        if not args.dry_run:
+            response = input(f"\nDelete these {len(files_to_delete)} files? (y/N): ")
+            if response.lower() != 'y':
+                print("Aborted by user")
+                return
+
+        # Delete files
+        success_count = 0
+        for obj_key in files_to_delete:
+            try:
+                if args.dry_run:
+                    print(f"[DRY RUN] Would delete: {obj_key}")
+                else:
+                    bucket.delete_object(obj_key)
+                    print(f"Deleted: {obj_key}")
+                success_count += 1
+            except Exception as e:
+                print(f"Error deleting {obj_key}: {e}", file=sys.stderr)
+
+        print(f"\nCompleted: {success_count}/{len(files_to_delete)} files processed")
+        return
+
+    # Handle keep-count based deletion (existing logic)
+    if hasattr(args, 'keep_count') and args.keep_count is not None:
+        if args.keep_count < 1:
+            print("Error: keep-count must be at least 1", file=sys.stderr)
+            sys.exit(1)
+        print(f"OSS Stack Cleaner - Keeping {args.keep_count} latest versions per stack per OS")
+        
+        # Parse and group files by stack and OS
+        stack_os_files = defaultdict(list)
+        
+        for obj_key in object_keys:
+            try:
+                stack_name, stack_version, os_name = parse_oss_filename(obj_key)
+                package_version = version.parse(stack_version)
+                main_version = f"{package_version.major}.{package_version.micro}"
+                stack_os_files[(stack_name, os_name, main_version)].append((obj_key, stack_version))
+            except ValueError as e:
+                print(f"Warning: Skipping invalid filename {obj_key}: {e}")
+                continue
+
+        # Sort versions for each stack-OS combination (newest first)
+        for key in stack_os_files:
+            stack_os_files[key].sort(key=lambda x: version.parse(x[1]), reverse=True)
+
+        # Determine which files to delete
+        files_to_delete = []
+        
+        for (stack_name, os_name, _), files in stack_os_files.items():
+            if len(files) > args.keep_count:
+                # Keep the first n files (newest), delete the rest
+                files_to_delete.extend([file_info[0] for file_info in files[args.keep_count:]])
+                print(f"Stack '{stack_name}' OS '{os_name}': keeping {args.keep_count} versions, deleting {len(files) - args.keep_count}")
+
+        if not files_to_delete:
+            print("No files to delete - all stacks have <= {} versions per OS".format(args.keep_count))
+            return
+
+        print(f"\nFound {len(files_to_delete)} files to delete:")
+        for obj_key in sorted(files_to_delete):
+            print(f"  - {obj_key}")
+
+        # Confirm deletion
+        if not args.dry_run:
+            response = input(f"\nDelete these {len(files_to_delete)} files? (y/N): ")
+            if response.lower() != 'y':
+                print("Aborted by user")
+                return
+
+        # Delete files
+        success_count = 0
+        for obj_key in files_to_delete:
+            try:
+                if args.dry_run:
+                    print(f"[DRY RUN] Would delete: {obj_key}")
+                else:
+                    bucket.delete_object(obj_key)
+                    print(f"Deleted: {obj_key}")
+                success_count += 1
+            except Exception as e:
+                print(f"Error deleting {obj_key}: {e}", file=sys.stderr)
+
+        print(f"\nCompleted: {success_count}/{len(files_to_delete)} files processed")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Git repository cleaner with various cleanup operations',
@@ -297,6 +460,10 @@ Examples:
   python cleaner.py tags -n 2 --confirm    # Skip confirmation prompt
   python cleaner.py issues --max-issues 50 # Keep 50 most recent issues
   python cleaner.py issues --dry-run       # Preview issue cleanup
+  python cleaner.py oss-stacks -n 3        # Keep 3 latest versions per stack per OS
+  python cleaner.py oss-stacks -n 2 --dry-run # Preview OSS stack cleanup
+  python cleaner.py oss-stacks -s linux-arm64-debian-12.tar.gz # Delete files with specific suffix
+  python cleaner.py oss-stacks -s linux-amd64-debian-12.tar.gz --dry-run # Preview suffix-based deletion
 
 Note: Issues cleanup requires admin permissions to delete issues.
 If deletion fails, issues will be closed instead.
@@ -321,6 +488,18 @@ If deletion fails, issues will be closed instead.
     issues_parser.add_argument('--dry-run', action='store_true',
                              help='Only print commands without executing them')
 
+    # OSS stacks cleanup parser
+    oss_parser = subparsers.add_parser('oss-stacks', help='Clean up old OSS stack files')
+    oss_parser.add_argument('--dry-run', action='store_true',
+                           help='Only print commands without executing them')
+    
+    # Make -n and -s mutually exclusive
+    oss_group = oss_parser.add_mutually_exclusive_group(required=True)
+    oss_group.add_argument('-n', '--keep-count', type=int,
+                          help='Number of latest versions to keep for each stack per OS')
+    oss_group.add_argument('-s', '--subfix', type=str,
+                          help='Suffix pattern to match files for deletion (e.g., linux-arm64-debian-12.tar.gz)')
+
     args = parser.parse_args()
 
     if not args.action:
@@ -331,6 +510,8 @@ If deletion fails, issues will be closed instead.
         clean_tags(args)
     elif args.action == 'issues':
         clean_github_issues(args)
+    elif args.action == 'oss-stacks':
+        clean_oss_stacks(args)
     else:
         parser.error(f"Unknown action: {args.action}")
 

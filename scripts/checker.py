@@ -158,18 +158,6 @@ repo_info_table = {
         "owner": "kubernetes",
         "match": "^kubernetes-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "mc": {
-        "name": "mc",
-        "type": "github",
-        "owner": "minio",
-        "match": "^RELEASE\.[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z$",
-    },
-    "minio": {
-        "name": "minio",
-        "type": "github",
-        "owner": "minio",
-        "match": "^RELEASE\.[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z$",
-    },
     "nginx": {
         "name": "nginx",
         "type": "github",

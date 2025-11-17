@@ -40,10 +40,8 @@ EOF
   install-stack rust "${RUST_VERSION}"
   . init-stack
 
-  curl -fsSL -o tmp.tar.gz https://github.com/containers/podman/archive/refs/tags/v${STACK_VERSION}.tar.gz
-  tar -xzf tmp.tar.gz && rm tmp.tar.gz
+  git clone -b v${STACK_VERSION} --dept=1 https://github.com/containers/podman podman-${STACK_VERSION}
   cd podman-${STACK_VERSION}
-
   PREFIX=/opt/drycc/podman make BUILDTAGS="seccomp"
   PREFIX=/opt/drycc/podman make install
   cd /workspace

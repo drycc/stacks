@@ -49,17 +49,34 @@ def upload_list(stack_name, dist_dir):
 
 
 def symlink(stack_name, version):
+
+    def get_system_version(obj_key):
+        _, system, system_version = obj_key.strip(".tar.gz").rsplit("-", 2)
+        return f"{system}-{system_version}"
+
     object_list = [
         obj.key for obj in bucket.list_objects(
             f"stacks/{stack_name}/{stack_name}-{version}.").object_list
     ]
     prefix = f"stacks/{stack_name}/{stack_name}-"
-    version_list = sorted(
-        [obj.replace(prefix, "").split("-", 1)[0] for obj in object_list],
-        key=parse,
-        reverse=True,
-    )
+    # Build a map of system-version to object keys
+    version_map = {}
     for obj in object_list:
+        system = get_system_version(obj)
+        if system not in version_map:
+            version_map[system] = [obj]
+        else:
+            version_map[system].append(obj)
+    for key, value in version_map.items():
+        version_list = sorted(
+            [obj.replace(prefix, "").split("-", 1)[0] for obj in value],
+            key=parse,
+            reverse=True,
+        )
+        version_map[key] = version_list
+
+    for obj in object_list:
+        version_list = version_map[get_system_version(obj)]
         if obj.startswith(f"{prefix}{version_list[0]}-"):
             symlink = re.sub(r"%s.([0-9]\.?){1,}" % f"{prefix}{version}", f"{prefix}{version}", obj)
             bucket.put_symlink(obj, symlink)

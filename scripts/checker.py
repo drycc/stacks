@@ -60,7 +60,7 @@ repo_info_table = {
         "name": "jmx_exporter",
         "type": "github",
         "owner": "prometheus",
-        "match": "^parent-[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+        "match": "^[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "caddy": {
         "name": "caddy",

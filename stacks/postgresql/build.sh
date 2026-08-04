@@ -101,7 +101,7 @@ function build() {
   export PG_CONFIG=/opt/drycc/postgresql/"${PG_MAJOR}"/bin/pg_config
   curl -sSL https://codeload.github.com/pgvector/pgvector/tar.gz/refs/tags/v${PGVECTOR_VERSION} | tar -xz &&
   cd pgvector-${PGVECTOR_VERSION} && \
-  make && \
+  make OPTFLAGS=""  && \
   make install && \
   cd - && \
   rm -rf pgvector-${PGVECTOR_VERSION}

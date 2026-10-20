@@ -3,9 +3,15 @@
 # Load stack utils
 . /usr/bin/stack-utils
 POSTGIS_VERSION=$(curl -Ls https://github.com/postgis/postgis/tags | grep -oP 'releases/tag/\K[^"]+' | grep -vE '[a-zA-Z]' | sort -Vr | head -1)
-TIMESCALE_VERSION=$(curl -Ls https://github.com/timescale/timescaledb/releases|grep /timescale/timescaledb/releases/tag/ | sed -E 's/.*\/timescale\/timescaledb\/releases\/tag\/([0-9\.]{1,})".*/\1/g' | head -1)
+TIMESCALE_ALL_VERSIONS=$(curl -Ls https://github.com/timescale/timescaledb/releases|grep /timescale/timescaledb/releases/tag/ | sed -E 's/.*\/timescale\/timescaledb\/releases\/tag\/([0-9\.]{1,})".*/\1/g')
+TIMESCALE_VERSION=$(echo "${TIMESCALE_ALL_VERSIONS}"|head -1)
+# timescaledb 2.28.x is the last minor version supporting postgresql 15
+case "${STACK_VERSION%%.*}" in
+  15) TIMESCALE_VERSION=$(echo "${TIMESCALE_ALL_VERSIONS}" | grep '^2\.28\.' | sort -Vr | head -1) ;;
+esac
 PGVECTOR_VERSION=$(curl -Ls https://github.com/pgvector/pgvector/tags | grep '/pgvector/pgvector/archive/refs/tags/' | sed -E 's|.*/tags/v([0-9]+\.[0-9]+\.[0-9]+).*|\1|' | sort -Vr | head -1)
 PG_REPACK_VERSION=$(curl -Ls https://github.com/reorg/pg_repack/tags | grep '/pg_repack/archive/refs/tags/' | sed -E 's|.*/tags/ver_([0-9]+\.[0-9]+\.[0-9]+).*|\1|' | sort -Vr | head -1)
+PG_PARTMAN_VERSION=$(curl -Ls https://github.com/pgpartman/pg_partman/tags | grep '/pgpartman/pg_partman/archive/refs/tags/' | sed -E 's|.*/tags/v([0-9]+\.[0-9]+\.[0-9]+).*|\1|' | sort -Vr | head -1)
 
 # Implement build function
 function build() {
@@ -77,14 +83,24 @@ function build() {
   cd - 
   # postgis
   echo "-----------------start buid postgis-------------"
-  curl -sSL "https://download.osgeo.org/postgis/source/postgis-${POSTGIS_VERSION}.tar.gz" | tar -xz && \
+  POSTGIS_TARBALL="postgis-${POSTGIS_VERSION}.tar.gz"
+  for i in $(seq 1 30); do
+    gzip -t "${POSTGIS_TARBALL}" 2>/dev/null && break
+    echo "downloading ${POSTGIS_TARBALL} attempt ${i} ..."
+    curl -sSL -C - --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
+      -o "${POSTGIS_TARBALL}" \
+      "https://download.osgeo.org/postgis/source/${POSTGIS_TARBALL}" || true
+    sleep 2
+  done
+  gzip -t "${POSTGIS_TARBALL}" && \
+  tar -xzf "${POSTGIS_TARBALL}" && \
   cd postgis-"${POSTGIS_VERSION}" && \
     ./configure --with-pgconfig=/opt/drycc/postgresql/"${PG_MAJOR}"/bin/pg_config \
     && \
   make && \
   make install && \
   cd - && \
-  rm -rf postgis-"${POSTGIS_VERSION}"
+  rm -rf postgis-"${POSTGIS_VERSION}" "${POSTGIS_TARBALL}"
   
   # # timescaledb
   echo "-----------------start buid timescaledb-------------"
@@ -106,7 +122,6 @@ function build() {
   cd - && \
   rm -rf pgvector-${PGVECTOR_VERSION}
 
-
 # pg_repack
   echo "-----------------start buid pg_repack-------------"
   export PG_CONFIG=/opt/drycc/postgresql/"${PG_MAJOR}"/bin/pg_config
@@ -116,6 +131,16 @@ function build() {
   make install && \
   cd - && \
   rm -rf pg_repack-ver-${PG_REPACK_VERSION}
+
+# pg_partman
+  echo "-----------------start buid pg_partman-------------"
+  export PG_CONFIG=/opt/drycc/postgresql/"${PG_MAJOR}"/bin/pg_config
+  curl -sSL https://github.com/pgpartman/pg_partman/archive/refs/tags/v${PG_PARTMAN_VERSION}.tar.gz | tar -xz &&
+  cd pg_partman-${PG_PARTMAN_VERSION} &&
+  make &&
+  make install &&
+  cd - &&
+  rm -rf pg_partman-${PG_PARTMAN_VERSION}
 
   cat  << EOF > "${PROFILE_DIR}/${STACK_NAME}.sh"
 export PATH="/opt/drycc/postgresql/$PG_MAJOR/bin:\$PATH"

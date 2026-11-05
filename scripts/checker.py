@@ -452,12 +452,6 @@ repo_info_table = {
         "owner": "victoriametrics",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "fluent-bit-manager": {
-        "name": "fluent-bit-manager",
-        "type": "github",
-        "owner": "drycc-addons",
-        "match": "v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "headscale": {
         "name": "headscale",
         "type": "github",

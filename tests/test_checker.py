@@ -8,6 +8,7 @@ Run: .venv/bin/python -m unittest discover -s tests -p 'test_checker.py' -v
 """
 
 import os
+import re
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -216,9 +217,46 @@ class RepoInfoTableTest(unittest.TestCase):
             if os.path.isdir(os.path.join(stacks_dir, name))
         }
         # main() iterates the stack directories, so every directory needs an
-        # entry; extra table entries (e.g. fluent-bit-manager) are dead but
-        # harmless.
-        self.assertLessEqual(stack_dirs, set(checker.repo_info_table.keys()))
+        # entry; an entry without a directory is dead configuration and an
+        # entry is missing a stack silently fails discovery, so require an
+        # exact match.
+        self.assertEqual(stack_dirs, set(checker.repo_info_table.keys()))
+
+
+class JqTagPatternTest(unittest.TestCase):
+    """jq upstream tags look like jq-1.7.1, with rc suffixes for
+    pre-releases (jq-1.7rc1) and a plain semver shape since the jqlang
+    move. The match pattern must accept the former and reject the
+    latter, or rc tags would leak into the discovery candidates."""
+
+    def setUp(self):
+        self.pattern = checker.repo_info_table["jq"]["match"]
+
+    def test_matches_stable_jq_tags(self):
+        stable_tags = [
+            "jq-1.6",
+            "jq-1.7",
+            "jq-1.7.1",
+            "jq-1.8.0",
+            "jq-1.8.1",
+            "jq-1.8.2",
+        ]
+        for tag in stable_tags:
+            with self.subTest(tag=tag):
+                self.assertIsNotNone(re.fullmatch(self.pattern, tag))
+
+    def test_rejects_unstable_or_malformed_jq_tags(self):
+        unstable_tags = [
+            "jq-1.7rc1",
+            "jq-1.7rc2",
+            "jq-1.8.2rc1",
+            "jq-1.7.",
+            "jq-1.8.2.1",
+            "1.8.2",
+        ]
+        for tag in unstable_tags:
+            with self.subTest(tag=tag):
+                self.assertIsNone(re.fullmatch(self.pattern, tag))
 
 
 class NoSideEffectsTest(unittest.TestCase):

@@ -48,6 +48,19 @@ export PATH="/opt/drycc/${STACK_NAME}/bin:\$PATH"
 EOF
 }
 
+function validate-stack-data() {
+  local payload
+  if [ ! -d "${DATA_DIR}" ]; then
+    echo "ERROR: build produced no payload: data directory ${DATA_DIR} does not exist" >&2
+    return 1
+  fi
+  payload=$(find "${DATA_DIR}" -path "${PROFILE_DIR}" -prune -o \( -type f -o -type l \) -print -quit)
+  if [ -z "${payload}" ]; then
+    echo "ERROR: build produced no payload files under ${DATA_DIR} (${PROFILE_DIR} excluded)" >&2
+    return 1
+  fi
+}
+
 function generate-stack-dependencies() {
   scanelp "${DATA_DIR}" | awk -F ":" '{print $1}' >> ${META_DIR}/dependencies
   sort ${META_DIR}/dependencies -u -o ${META_DIR}/dependencies
@@ -60,6 +73,7 @@ function source-stack-path() {
 function build-stack() {
   generate-stack-template
   build || exit 1
+  validate-stack-data || exit 1
   generate-stack-dependencies
   generate-stack-package "$1"
 }

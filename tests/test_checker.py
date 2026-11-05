@@ -220,6 +220,31 @@ class RepoInfoTableTest(unittest.TestCase):
         # harmless.
         self.assertLessEqual(stack_dirs, set(checker.repo_info_table.keys()))
 
+
+class NoSideEffectsTest(unittest.TestCase):
+    """checker.py is a pure discovery library.
+
+    The nightly reconcile flow replaced the old checker that created
+    drycc/stacks tags and "new build for ..." issues. Those mutation
+    entry points must not grow back.
+    """
+
+    def test_has_no_drycc_mutation_entry_points(self):
+        for name in (
+            "create_github_tag",
+            "create_github_issue",
+            "check_github_version",
+            "check_url_version",
+            "main",
+        ):
+            with self.subTest(function=name):
+                self.assertFalse(hasattr(checker, name))
+
+    def test_module_is_not_runnable(self):
+        self.assertIsNone(getattr(checker, "__main__", None))
+        source = open(checker.__file__).read()
+        self.assertNotIn('__name__ == "__main__"', source)
+
     def test_only_supported_types(self):
         for stack, info in checker.repo_info_table.items():
             with self.subTest(stack=stack):

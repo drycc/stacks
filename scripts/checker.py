@@ -473,29 +473,6 @@ repo_info_table = {
 }
 
 
-def create_github_tag(stack, tag_name):
-    sha = requests.get(
-        "https://api.github.com/repos/drycc/stacks/git/trees/main",
-        headers=github_headers,
-    ).json()["sha"]
-    response = requests.post(
-        "https://api.github.com/repos/drycc/stacks/git/tags",
-        data = json.dumps({
-            "tag": tag_name,
-            "object": sha,
-            "message": f"new build for {stack}",
-            "type": "commit",
-        }),
-        headers=github_headers,
-    ).json()
-    params = dict(ref=f"refs/tags/{tag_name}", sha=response['object']['sha'])
-    response = requests.post(
-        'https://api.github.com/repos/drycc/stacks/git/refs',
-        data=json.dumps(params),
-        headers=github_headers,
-    )
-
-
 def normalize_version(tag_name):
     """Extract the stack version from an upstream tag name."""
     strip_regex = "^[a-zA-Z\-_]{1,}"
@@ -506,25 +483,6 @@ def normalize_version(tag_name):
     if re.search(replace_regex, version):
         version = re.subn(replace_regex, ".", version)[0].strip(".")
     return version
-
-
-def create_github_issue(stack, tag_name):
-    version = normalize_version(tag_name)
-    if requests.get(
-        f"https://api.github.com/repos/drycc/stacks/git/ref/tags/{stack}@{version}",
-        headers=github_headers,
-    ).status_code == 404:
-        create_github_tag(stack, f"{stack}@{version}")
-        link = f"https://github.com/search?q=org%3Adrycc+install-stack+{stack}&type=code"
-        requests.post(
-            "https://api.github.com/repos/drycc/stacks/issues",
-            data = json.dumps({
-                "title": f"new build for {stack}@{version}",
-                "body": f"Please judge whether the [referenced item]({link}) needs to be changed.",
-                "labels": ["tag"]
-            }),
-            headers=github_headers,
-        )
 
 
 github_tags_graphql = """
@@ -623,62 +581,3 @@ def discover_candidates(stack, session=None):
         return _url_candidates(stack, info, session)
     raise NotImplementedError(f"{info['type']} NotImplemented")
 
-
-def check_github_version(stack):
-    info = repo_info_table[stack]
-    response = requests.post(
-        "https://api.github.com/graphql",
-        data=json.dumps({
-            "query": github_tags_graphql.replace(
-                "{owner}", info["owner"]).replace("{name}", info["name"]),
-        }),
-        headers=github_headers,
-    )
-    for tag in response.json()["data"]["repository"]["refs"]["edges"]:
-        if "tagger" in tag["node"]["target"]:
-            date = datetime.strptime(
-                tag["node"]["target"]["tagger"]["date"][:19], "%Y-%m-%dT%H:%M:%S"
-            ).astimezone(timezone.utc)
-        else:
-            date = datetime.strptime(
-                requests.get(
-                    "https://api.github.com/repos/{}/{}/commits/{}".format(
-                        info["owner"], info["name"], tag["node"]["target"]["oid"]
-                    ), headers=github_headers
-                ).json()["commit"]["author"]["date"][:19],
-                "%Y-%m-%dT%H:%M:%S"
-            ).astimezone(timezone.utc)
-        if re.match(info["match"], tag["node"]["name"]):
-            if (datetime.now(timezone.utc) - date).days <= 7:
-                create_github_issue(stack, tag["node"]["name"])
-            else:
-                break
-
-def check_url_version(stack):
-    info = repo_info_table[stack]
-    html = requests.get(info["url"]).text
-    versions = set()
-    for url in set(re.findall(info["search"], html)):
-        match = re.search(info["version"], url)
-        if match:
-            versions.add(match.group())
-    for version in versions:
-        create_github_issue(stack, version)
-
-
-def main():
-    for stack in os.listdir(os.path.join(os.path.dirname(__file__), "..", "stacks")):
-        if stack not in repo_info_table:
-            raise NotImplementedError(f"{stack} not in repo_info_table")
-        else:
-            repo_type = repo_info_table[stack]["type"]
-            if repo_type == "github":
-                check_github_version(stack)
-            elif repo_type == 'url':
-                check_url_version(stack)
-            else:
-                raise NotImplementedError(f"{repo_type} NotImplemented")
-
-
-if __name__ == "__main__":
-   main()

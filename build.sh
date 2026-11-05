@@ -72,14 +72,11 @@ function symlink {
 
 
 function reconcile {
-  arch="${1:-}"
   create-buildpack-dep
   # Plan inside the buildpack image so /etc/os-release matches the build
-  # environment, the same source stack-utils uses for OS_FLAVOUR.
-  local plan_args=(plan)
-  if [ -n "${arch}" ]; then
-    plan_args+=(--arch "${arch}")
-  fi
+  # environment, the same source stack-utils uses for OS_FLAVOUR. All
+  # arguments are forwarded to "reconcile.py plan"; arch and flavour are
+  # detected inside the image unless given explicitly (--arch etc).
   local plan
   plan=$(podman run --rm \
     --env OSS_ENDPOINT="${OSS_ENDPOINT:-}" \
@@ -89,9 +86,16 @@ function reconcile {
     -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
     -w "${CURRENT_DIR}" \
     "${BUILDPACK_DEP_IMAGE}" \
-    python3 scripts/reconcile.py "${plan_args[@]}")
+    python3 scripts/reconcile.py plan "$@")
   if [ -z "${plan}" ]; then
     echo "reconcile: nothing to build"
+    return 0
+  fi
+  if [ "${RECONCILE_DRY_RUN:-}" = "1" ]; then
+    # Observation mode: print the plan the nightly cron would build so it
+    # can be reviewed in the pipeline logs before enabling real builds.
+    echo "reconcile: dry run, $(printf '%s\n' "${plan}" | grep -c .) item(s) to build:"
+    printf '%s\n' "${plan}"
     return 0
   fi
   local ok=0 failed=0

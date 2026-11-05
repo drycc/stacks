@@ -30,8 +30,9 @@ report() {
 }
 
 # Write a fake podman executable into <root>/bin. It records invocations
-# under <root>/state and serves the plan from <root>/plan; a build whose
-# STACK_VERSION equals RECONCILE_TEST_FAIL_VERSION fails.
+# under <root>/state (builds, uploads, planner args) and serves the plan
+# from <root>/plan; a build whose STACK_VERSION equals
+# RECONCILE_TEST_FAIL_VERSION fails.
 make_fake_podman() {
   local root="$1"
   mkdir -p "${root}/bin"
@@ -44,6 +45,7 @@ case " $* " in
     exit 0
     ;;
   *"reconcile.py"*)
+    echo "$*" >> "${RECONCILE_TEST_STATE}/plans"
     cat "${RECONCILE_TEST_PLAN}"
     exit 0
     ;;
@@ -77,9 +79,11 @@ EOF
 }
 
 # Run build.sh's reconcile inside an isolated subshell with the fake podman
-# on PATH. Returns "rc|builds|uploads|image_builds|root".
+# on PATH. Returns "rc|builds|uploads|image_builds|root". Arguments after
+# dry_run are forwarded to reconcile (e.g. --arch arm64 --max-total 5).
 run_reconcile() {
-  local root="$1" plan_content="$2" fail_version="${3:-}" arch="${4:-amd64}"
+  local root="$1" plan_content="$2" fail_version="${3:-}" dry_run="${4:-}"
+  shift 4
   mkdir -p "${root}/state"
   printf '%s' "${plan_content}" > "${root}/plan"
   make_fake_podman "${root}"
@@ -94,14 +98,11 @@ run_reconcile() {
     export RECONCILE_TEST_STATE="${root}/state"
     export RECONCILE_TEST_PLAN="${root}/plan"
     export RECONCILE_TEST_FAIL_VERSION="${fail_version}"
+    export RECONCILE_DRY_RUN="${dry_run}"
     export PATH="${root}/bin:${PATH}"
     # shellcheck source=/dev/null
     . "${REPO}/build.sh"
-    if [ -n "${arch}" ]; then
-      reconcile "${arch}"
-    else
-      reconcile
-    fi
+    reconcile "$@"
   ) > "${root}/out.log" 2>&1 || rc=$?
   local builds uploads image_builds
   builds="$(cat "${root}/state/builds" 2> /dev/null | paste -sd, -)"
@@ -124,7 +125,7 @@ show_log_on_failure() {
 
 test_reconcile_builds_each_planned_item_and_reuses_the_image() {
   local out problems=""
-  out="$(run_reconcile "$(mktemp -d)" $'nginx@1.31.8\nrustfs@1.0.4\n' '')"
+  out="$(run_reconcile "$(mktemp -d)" $'nginx@1.31.8\nrustfs@1.0.4\n' '' '')"
   parse_result "${out}"
   [ "${RESULT_RC}" -eq 0 ] || problems="${problems} exit=${RESULT_RC}"
   [ "${RESULT_IMAGE_BUILDS}" -eq 1 ] || problems="${problems} image_builds=${RESULT_IMAGE_BUILDS}"
@@ -142,7 +143,7 @@ test_reconcile_builds_each_planned_item_and_reuses_the_image() {
 
 test_reconcile_continues_after_a_failure_and_exits_non_zero() {
   local out problems=""
-  out="$(run_reconcile "$(mktemp -d)" $'nginx@1.31.8\nbadstack@9.9.9\n' '9.9.9')"
+  out="$(run_reconcile "$(mktemp -d)" $'nginx@1.31.8\nbadstack@9.9.9\n' '9.9.9' '')"
   parse_result "${out}"
   [ "${RESULT_RC}" -ne 0 ] || problems="${problems} exit=0"
   [ "${RESULT_IMAGE_BUILDS}" -eq 1 ] || problems="${problems} image_builds=${RESULT_IMAGE_BUILDS}"
@@ -176,10 +177,50 @@ test_reconcile_with_empty_plan_builds_nothing() {
   fi
 }
 
+test_reconcile_dry_run_prints_the_plan_without_building() {
+  local out problems=""
+  out="$(run_reconcile "$(mktemp -d)" $'nginx@1.31.8\nrustfs@1.0.4\n' '' '1')"
+  parse_result "${out}"
+  [ "${RESULT_RC}" -eq 0 ] || problems="${problems} exit=${RESULT_RC}"
+  [ -z "${RESULT_BUILDS}" ] || problems="${problems} builds=[${RESULT_BUILDS}]"
+  [ "${RESULT_UPLOADS}" -eq 0 ] || problems="${problems} uploads=${RESULT_UPLOADS}"
+  [ "${RESULT_IMAGE_BUILDS}" -eq 1 ] || problems="${problems} image_builds=${RESULT_IMAGE_BUILDS}"
+  grep -q "dry run" "${RESULT_ROOT}/out.log" || problems="${problems} dry-run-message-missing"
+  grep -q "nginx@1.31.8" "${RESULT_ROOT}/out.log" || problems="${problems} plan-items-missing"
+  grep -q "rustfs@1.0.4" "${RESULT_ROOT}/out.log" || problems="${problems} plan-items-missing"
+  grep -q "reconcile: building" "${RESULT_ROOT}/out.log" && problems="${problems} unexpected-build-attempt"
+  if [ -z "${problems}" ]; then
+    report "reconcile dry run prints the plan without building" 0
+    rm -rf "${RESULT_ROOT}"
+  else
+    show_log_on_failure "${problems}" || true
+    report "reconcile dry run prints the plan without building" 1
+  fi
+}
+
+test_reconcile_forwards_planner_arguments() {
+  local out problems=""
+  out="$(run_reconcile "$(mktemp -d)" $'nginx@1.31.8\n' '' '' --arch arm64 --max-total 5)"
+  parse_result "${out}"
+  [ "${RESULT_RC}" -eq 0 ] || problems="${problems} exit=${RESULT_RC}"
+  grep -q "reconcile.py plan --arch arm64 --max-total 5" \
+    "${RESULT_ROOT}/state/plans" 2> /dev/null \
+    || problems="${problems} planner-args-not-forwarded=[ $(cat "${RESULT_ROOT}/state/plans" 2> /dev/null) ]"
+  if [ -z "${problems}" ]; then
+    report "reconcile forwards planner arguments" 0
+    rm -rf "${RESULT_ROOT}"
+  else
+    show_log_on_failure "${problems}" || true
+    report "reconcile forwards planner arguments" 1
+  fi
+}
+
 main() {
   test_reconcile_builds_each_planned_item_and_reuses_the_image
   test_reconcile_continues_after_a_failure_and_exits_non_zero
   test_reconcile_with_empty_plan_builds_nothing
+  test_reconcile_dry_run_prints_the_plan_without_building
+  test_reconcile_forwards_planner_arguments
 
   echo
   echo "${passed} passed, ${failed} failed"

@@ -496,7 +496,8 @@ def create_github_tag(stack, tag_name):
     )
 
 
-def create_github_issue(stack, tag_name):
+def normalize_version(tag_name):
+    """Extract the stack version from an upstream tag name."""
     strip_regex = "^[a-zA-Z\-_]{1,}"
     replace_regex = "[a-zA-Z\+\-_]{1,}"
     version = tag_name
@@ -504,6 +505,11 @@ def create_github_issue(stack, tag_name):
         version = re.subn(strip_regex, "", tag_name)[0]
     if re.search(replace_regex, version):
         version = re.subn(replace_regex, ".", version)[0].strip(".")
+    return version
+
+
+def create_github_issue(stack, tag_name):
+    version = normalize_version(tag_name)
     if requests.get(
         f"https://api.github.com/repos/drycc/stacks/git/ref/tags/{stack}@{version}",
         headers=github_headers,
@@ -543,6 +549,80 @@ query {
   }
 }
 """
+
+def _tag_date(tag, info, session):
+    target = tag["node"]["target"]
+    if "tagger" in target:
+        raw = target["tagger"]["date"]
+    else:
+        response = session.get(
+            "https://api.github.com/repos/{}/{}/commits/{}".format(
+                info["owner"], info["name"], target["oid"]
+            ),
+            headers=github_headers,
+        )
+        raw = response.json()["commit"]["author"]["date"]
+    return datetime.strptime(raw[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+
+
+def _github_candidates(stack, info, session):
+    response = session.post(
+        "https://api.github.com/graphql",
+        data=json.dumps({
+            "query": github_tags_graphql.replace(
+                "{owner}", info["owner"]).replace("{name}", info["name"]),
+        }),
+        headers=github_headers,
+    )
+    candidates = []
+    seen = set()
+    for tag in response.json()["data"]["repository"]["refs"]["edges"]:
+        name = tag["node"]["name"]
+        if not re.match(info["match"], name):
+            continue
+        version = normalize_version(name)
+        if version in seen:
+            continue
+        seen.add(version)
+        candidates.append({
+            "stack": stack,
+            "version": version,
+            "upstream": name,
+            "date": _tag_date(tag, info, session),
+        })
+    return candidates
+
+
+def _url_candidates(stack, info, session):
+    html = session.get(info["url"]).text
+    versions = set()
+    for url in set(re.findall(info["search"], html)):
+        match = re.search(info["version"], url)
+        if match:
+            versions.add(match.group())
+    return [
+        {"stack": stack, "version": version, "upstream": version, "date": None}
+        for version in sorted(versions, reverse=True)
+    ]
+
+
+def discover_candidates(stack, session=None):
+    """Discover upstream release candidates for a stack (read-only).
+
+    Returns a list of candidates, newest first for github stacks, each a
+    dict with "stack", "version" (normalized), "upstream" (raw tag name)
+    and "date" (aware datetime, or None for url stacks). Never creates
+    tags or issues in drycc/stacks.
+    """
+    info = repo_info_table[stack]
+    if session is None:
+        session = requests
+    if info["type"] == "github":
+        return _github_candidates(stack, info, session)
+    if info["type"] == "url":
+        return _url_candidates(stack, info, session)
+    raise NotImplementedError(f"{info['type']} NotImplemented")
+
 
 def check_github_version(stack):
     info = repo_info_table[stack]

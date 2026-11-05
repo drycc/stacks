@@ -283,6 +283,230 @@ class CliTest(unittest.TestCase):
         self.run_plan(["plan", "--arch", "amd64", "--flavour", "debian-13", "--stack", "nginx"])
         self.assertEqual(served.calls, ["nginx"])
 
+    def test_cli_alert_forwards_arguments(self):
+        with mock.patch("reconcile.alert_failure", return_value=42) as alert:
+            rc = reconcile.main([
+                "alert", "--stack", "nginx", "--version", "1.31.8",
+                "--arch", "amd64", "--flavour", "debian-13",
+                "--pipeline-url", "https://ci/42",
+            ])
+        self.assertEqual(rc, 0)
+        alert.assert_called_once_with(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13",
+            pipeline_url="https://ci/42",
+        )
+
+    def test_cli_alert_failure_returns_non_zero(self):
+        with mock.patch("reconcile.alert_failure", side_effect=RuntimeError("github down")):
+            rc = reconcile.main([
+                "alert", "--stack", "nginx", "--version", "1.31.8",
+                "--arch", "amd64", "--flavour", "debian-13",
+            ])
+        self.assertEqual(rc, 1)
+
+    def test_cli_resolve_forwards_arguments(self):
+        with mock.patch("reconcile.resolve_failures", return_value=[7]) as resolve:
+            rc = reconcile.main([
+                "resolve", "--stack", "nginx", "--version", "1.31.8",
+                "--arch", "amd64", "--flavour", "debian-13",
+            ])
+        self.assertEqual(rc, 0)
+        resolve.assert_called_once_with(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13",
+        )
+
+
+class FakeAlertResponse:
+    def __init__(self, payload=None, status=200):
+        self._payload = payload or {}
+        self.status_code = status
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError("http %d" % self.status_code)
+
+
+class AlertSession:
+    """Serves GitHub search results and the recent-open-issues listing,
+    recording every request as (method, url, params_or_json_body) tuples.
+
+    search_items feed the /search endpoint (indexed issues); recent_items
+    feed the /issues listing (fresh issues the search index has not
+    ingested yet)."""
+
+    def __init__(self, search_items, created_number=555, recent_items=None):
+        self.requests = []
+        self._search = {"total_count": len(search_items), "items": search_items}
+        self._recent = recent_items or []
+        self._created_number = created_number
+
+    def get(self, url, params=None, headers=None, **kwargs):
+        self.requests.append(("GET", url, params))
+        if url.endswith("/search/issues"):
+            return FakeAlertResponse(self._search)
+        if url.endswith("/repos/drycc/stacks/issues"):
+            return FakeAlertResponse(self._recent)
+        raise AssertionError("unexpected GET %s" % url)
+
+    def post(self, url, json=None, headers=None, **kwargs):
+        self.requests.append(("POST", url, json))
+        if url.endswith("/issues"):
+            return FakeAlertResponse({"number": self._created_number})
+        return FakeAlertResponse({})
+
+    def patch(self, url, json=None, headers=None, **kwargs):
+        self.requests.append(("PATCH", url, json))
+        return FakeAlertResponse({"state": "closed"})
+
+
+class FailureIssueAlertTest(unittest.TestCase):
+    def setUp(self):
+        self._orig_token = os.environ.get("GITHUB_TOKEN")
+        os.environ["GITHUB_TOKEN"] = "test-token"
+
+    def tearDown(self):
+        if self._orig_token is None:
+            os.environ.pop("GITHUB_TOKEN", None)
+        else:
+            os.environ["GITHUB_TOKEN"] = self._orig_token
+
+    def test_title_format(self):
+        self.assertEqual(
+            reconcile.failure_issue_title("postgresql", "14.21", "arm64", "debian-13"),
+            "build failed for postgresql@14.21 on arm64/debian-13",
+        )
+
+    def test_alert_creates_deduplicated_issue_when_none_open(self):
+        session = AlertSession(search_items=[])
+        number = reconcile.alert_failure(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13",
+            pipeline_url="https://ci/42", session=session,
+        )
+        self.assertEqual(number, 555)
+        searches = [r for r in session.requests
+                    if r[0] == "GET" and r[1].endswith("/search/issues")]
+        self.assertEqual(len(searches), 1)
+        self.assertIn(
+            '"build failed for nginx@1.31.8 on amd64/debian-13"',
+            searches[0][2]["q"],
+        )
+        creations = [r for r in session.requests
+                     if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")]
+        self.assertEqual(len(creations), 1)
+        title = creations[0][2]["title"]
+        body = creations[0][2]["body"]
+        self.assertEqual(title, "build failed for nginx@1.31.8 on amd64/debian-13")
+        self.assertIn("nginx", body)
+        self.assertIn("1.31.8", body)
+        self.assertIn("amd64/debian-13", body)
+        self.assertIn("https://ci/42", body)
+        self.assertIn("closes automatically", body)
+
+    def test_alert_dedups_even_when_the_search_index_lags(self):
+        # a freshly created issue is invisible to /search but present in
+        # the recent-open-issues listing: dedup must not create a second one
+        title = "build failed for nginx@1.31.8 on amd64/debian-13"
+        session = AlertSession(search_items=[], recent_items=[{"number": 81, "title": title}])
+        number = reconcile.alert_failure(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
+        )
+        self.assertIsNone(number)
+        self.assertEqual(
+            [r for r in session.requests if r[0] == "POST"],
+            [],
+        )
+
+    def test_alert_skips_when_an_issue_is_already_open(self):
+        session = AlertSession(search_items=[{"number": 77, "title": "old"}])
+        number = reconcile.alert_failure(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
+        )
+        self.assertIsNone(number)
+        self.assertEqual(
+            [r for r in session.requests if r[0] == "POST"],
+            [],
+        )
+
+    def test_alert_without_token_makes_no_requests(self):
+        os.environ.pop("GITHUB_TOKEN", None)
+        session = AlertSession(search_items=[])
+        number = reconcile.alert_failure(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
+        )
+        self.assertIsNone(number)
+        self.assertEqual(session.requests, [])
+
+    def test_alert_omits_pipeline_line_without_url(self):
+        session = AlertSession(search_items=[])
+        reconcile.alert_failure(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
+        )
+        creation = [r for r in session.requests
+                    if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")][0]
+        self.assertNotIn("pipeline", creation[2]["body"])
+
+
+class FailureIssueResolveTest(unittest.TestCase):
+    def setUp(self):
+        self._orig_token = os.environ.get("GITHUB_TOKEN")
+        os.environ["GITHUB_TOKEN"] = "test-token"
+
+    def tearDown(self):
+        if self._orig_token is None:
+            os.environ.pop("GITHUB_TOKEN", None)
+        else:
+            os.environ["GITHUB_TOKEN"] = self._orig_token
+
+    def test_closes_every_matching_issue_with_a_comment(self):
+        session = AlertSession(search_items=[{"number": 77}, {"number": 78}])
+        closed = reconcile.resolve_failures(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
+        )
+        self.assertEqual(closed, [77, 78])
+        patches = [r for r in session.requests if r[0] == "PATCH"]
+        self.assertEqual(
+            sorted(p[1].rsplit("/", 1)[-1] for p in patches), ["77", "78"],
+        )
+        self.assertTrue(all(p[2] == {"state": "closed"} for p in patches))
+        comments = [r for r in session.requests
+                    if r[0] == "POST" and r[1].endswith("/comments")]
+        self.assertEqual(len(comments), 2)
+        self.assertIn("built successfully", comments[0][2]["body"])
+
+    def test_closes_freshly_created_issues_despite_index_lag(self):
+        title = "build failed for nginx@1.31.8 on amd64/debian-13"
+        session = AlertSession(search_items=[], recent_items=[{"number": 81, "title": title}])
+        closed = reconcile.resolve_failures(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
+        )
+        self.assertEqual(closed, [81])
+        patches = [r for r in session.requests if r[0] == "PATCH"]
+        self.assertEqual(len(patches), 1)
+        self.assertTrue(patches[0][1].endswith("/issues/81"))
+
+    def test_resolve_without_open_issues_is_a_noop(self):
+        session = AlertSession(search_items=[])
+        closed = reconcile.resolve_failures(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
+        )
+        self.assertEqual(closed, [])
+        self.assertEqual(
+            [r for r in session.requests if r[0] in ("POST", "PATCH")],
+            [],
+        )
+
+    def test_resolve_without_token_makes_no_requests(self):
+        os.environ.pop("GITHUB_TOKEN", None)
+        session = AlertSession(search_items=[])
+        closed = reconcile.resolve_failures(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
+        )
+        self.assertEqual(closed, [])
+        self.assertEqual(session.requests, [])
+
 
 if __name__ == "__main__":
     unittest.main()

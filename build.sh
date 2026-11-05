@@ -71,6 +71,30 @@ function symlink {
 }
 
 
+function reconcile-report() {
+  # Report a per-item build result to GitHub: "alert" creates a
+  # deduplicated issue for a failed build, "resolve" closes the open
+  # failure issue after a successful build. Reporting problems are logged
+  # but never change the reconcile exit status.
+  local action="${1:?action is required}"
+  local stack="${2:?stack is required}"
+  local version="${3:?version is required}"
+  [ -n "${GITHUB_TOKEN:-}" ] || return 0
+  local report_args=("${action}" --stack "${stack}" --version "${version}")
+  if [ "${action}" = "alert" ]; then
+    report_args+=(--pipeline-url "${CI_PIPELINE_URL:-}")
+  fi
+  if ! podman run --rm \
+    --env GITHUB_TOKEN="${GITHUB_TOKEN}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/reconcile.py "${report_args[@]}"; then
+    echo "reconcile: ${action} reporting failed for ${stack}@${version}" >&2
+  fi
+}
+
+
 function reconcile {
   create-buildpack-dep
   # Plan inside the buildpack image so /etc/os-release matches the build
@@ -106,9 +130,11 @@ function reconcile {
     # inside build/upload (an if-context would disable it).
     if SKIP_CREATE_BUILDPACK_DEP=1 bash "${CURRENT_DIR}/build.sh" all "${item}"; then
       ok=$((ok + 1))
+      reconcile-report resolve "${item%@*}" "${item#*@}"
     else
       failed=$((failed + 1))
       echo "reconcile: failed to build ${item}" >&2
+      reconcile-report alert "${item%@*}" "${item#*@}"
     fi
   done <<< "${plan}"
   echo "reconcile: done, ok=${ok} failed=${failed}"

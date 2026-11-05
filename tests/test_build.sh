@@ -44,6 +44,14 @@ case " $* " in
     echo "image-build" >> "${RECONCILE_TEST_STATE}/buildpack-builds"
     exit 0
     ;;
+  *"reconcile.py alert"*)
+    echo "$*" >> "${RECONCILE_TEST_STATE}/alerts"
+    exit 0
+    ;;
+  *"reconcile.py resolve"*)
+    echo "$*" >> "${RECONCILE_TEST_STATE}/resolves"
+    exit 0
+    ;;
   *"reconcile.py"*)
     echo "$*" >> "${RECONCILE_TEST_STATE}/plans"
     cat "${RECONCILE_TEST_PLAN}"
@@ -94,7 +102,9 @@ run_reconcile() {
     export OSS_ENDPOINT=http://fake-oss
     export OSS_ACCESS_KEY_ID=fake-id
     export OSS_ACCESS_KEY_SECRET=fake-secret
-    export GITHUB_TOKEN=fake-token
+    # an empty GITHUB_TOKEN stays empty (the no-token test relies on that);
+    # unset falls back to the fake token
+    export GITHUB_TOKEN="${GITHUB_TOKEN-fake-token}"
     export RECONCILE_TEST_STATE="${root}/state"
     export RECONCILE_TEST_PLAN="${root}/plan"
     export RECONCILE_TEST_FAIL_VERSION="${fail_version}"
@@ -109,6 +119,11 @@ run_reconcile() {
   uploads="$(grep -c . "${root}/state/uploads" 2> /dev/null || echo 0)"
   image_builds="$(grep -c . "${root}/state/buildpack-builds" 2> /dev/null || echo 0)"
   echo "${rc}|${builds}|${uploads}|${image_builds}|${root}"
+}
+
+count_calls() {
+  # count_calls <file> <pattern>: number of recorded invocations matching
+  grep -c -- "${2}" "${1}" 2> /dev/null || echo 0
 }
 
 parse_result() {
@@ -132,6 +147,12 @@ test_reconcile_builds_each_planned_item_and_reuses_the_image() {
   [ "${RESULT_BUILDS}" = "nginx@1.31.8,rustfs@1.0.4" ] || problems="${problems} builds=[${RESULT_BUILDS}]"
   [ "${RESULT_UPLOADS}" -eq 2 ] || problems="${problems} uploads=${RESULT_UPLOADS}"
   grep -q "ok=2 failed=0" "${RESULT_ROOT}/out.log" || problems="${problems} summary-missing"
+  [ "$(count_calls "${RESULT_ROOT}/state/resolves" "reconcile.py resolve")" -eq 2 ] \
+    || problems="${problems} resolves=$(count_calls "${RESULT_ROOT}/state/resolves" "reconcile.py resolve")"
+  grep -q -- "--stack nginx --version 1.31.8" "${RESULT_ROOT}/state/resolves" 2> /dev/null \
+    || problems="${problems} resolve-nginx-missing"
+  [ "$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")" -eq 0 ] \
+    || problems="${problems} unexpected-alert"
   if [ -z "${problems}" ]; then
     report "reconcile builds each planned item and reuses the image" 0
     rm -rf "${RESULT_ROOT}"
@@ -150,12 +171,37 @@ test_reconcile_continues_after_a_failure_and_exits_non_zero() {
   [ "${RESULT_BUILDS}" = "nginx@1.31.8,badstack@9.9.9" ] || problems="${problems} builds=[${RESULT_BUILDS}]"
   [ "${RESULT_UPLOADS}" -eq 1 ] || problems="${problems} uploads=${RESULT_UPLOADS}"
   grep -q "ok=1 failed=1" "${RESULT_ROOT}/out.log" || problems="${problems} summary-missing"
+  [ "$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")" -eq 1 ] \
+    || problems="${problems} alerts=$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")"
+  grep -q -- "--stack badstack --version 9.9.9" "${RESULT_ROOT}/state/alerts" 2> /dev/null \
+    || problems="${problems} alert-badstack-missing"
+  [ "$(count_calls "${RESULT_ROOT}/state/resolves" "reconcile.py resolve")" -eq 1 ] \
+    || problems="${problems} resolves=$(count_calls "${RESULT_ROOT}/state/resolves" "reconcile.py resolve")"
   if [ -z "${problems}" ]; then
     report "reconcile continues after a failure and exits non-zero" 0
     rm -rf "${RESULT_ROOT}"
   else
     show_log_on_failure "${problems}" || true
     report "reconcile continues after a failure and exits non-zero" 1
+  fi
+}
+
+test_reconcile_without_github_token_skips_reporting() {
+  local out problems=""
+  out="$(GITHUB_TOKEN= run_reconcile "$(mktemp -d)" $'nginx@1.31.8\nbadstack@9.9.9\n' '9.9.9' '')"
+  parse_result "${out}"
+  [ "${RESULT_RC}" -ne 0 ] || problems="${problems} exit=0"
+  [ -z "$(cat "${RESULT_ROOT}/state/alerts" 2> /dev/null)" ] \
+    || problems="${problems} alerts-should-be-empty"
+  [ -z "$(cat "${RESULT_ROOT}/state/resolves" 2> /dev/null)" ] \
+    || problems="${problems} resolves-should-be-empty"
+  grep -q "ok=1 failed=1" "${RESULT_ROOT}/out.log" || problems="${problems} summary-missing"
+  if [ -z "${problems}" ]; then
+    report "reconcile without github token skips reporting" 0
+    rm -rf "${RESULT_ROOT}"
+  else
+    show_log_on_failure "${problems}" || true
+    report "reconcile without github token skips reporting" 1
   fi
 }
 
@@ -221,6 +267,7 @@ main() {
   test_reconcile_with_empty_plan_builds_nothing
   test_reconcile_dry_run_prints_the_plan_without_building
   test_reconcile_forwards_planner_arguments
+  test_reconcile_without_github_token_skips_reporting
 
   echo
   echo "${passed} passed, ${failed} failed"

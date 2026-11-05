@@ -137,8 +137,8 @@ repo_info_table = {
     "jq": {
         "name": "jq",
         "type": "github",
-        "owner": "stedolan",
-        "match": "^jq-[0-9]{1,}\.[0-9]{1,}\.?[0-9]{0}$",
+        "owner": "jqlang",
+        "match": r"^jq-[0-9]+\.[0-9]+(?:\.[0-9]+)?$",
     },
     "kvrocks": {
         "name": "kvrocks",

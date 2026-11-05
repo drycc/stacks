@@ -5,7 +5,8 @@ set -u
 DRYCC_REGISTRY=${DRYCC_REGISTRY:-${DEV_REGISTRY:-registry.drycc.cc}}
 
 # make sure we are in this dir
-CURRENT_DIR=$(cd "$(dirname "$0")"; pwd)
+# (BASH_SOURCE works both when executed and when sourced by the tests)
+CURRENT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)
 #dist dir
 DIST_DIR="${CURRENT_DIR}"/_dist
 
@@ -15,6 +16,10 @@ CODENAME="${CODENAME:?codename is required}"
 BUILDPACK_DEP_IMAGE="${DRYCC_REGISTRY}"/drycc/buildpack-dep:"${CODENAME}"
 
 function create-buildpack-dep {
+  if [ "${SKIP_CREATE_BUILDPACK_DEP:-}" = "1" ]; then
+    # the image was already created by this run (see reconcile)
+    return 0
+  fi
   # build buildpack-dep image
   podman build --pull -f "${CURRENT_DIR}"/Dockerfile --build-arg CODENAME="${CODENAME}" --build-arg DRYCC_REGISTRY="${DRYCC_REGISTRY}" . -t "${BUILDPACK_DEP_IMAGE}"
 }
@@ -63,6 +68,47 @@ function symlink {
     -w /workspace \
     "${BUILDPACK_DEP_IMAGE}" \
     python3 /scripts/storage.py symlink "${1}" "${2}"
+}
+
+
+function reconcile {
+  arch="${1:-}"
+  create-buildpack-dep
+  # Plan inside the buildpack image so /etc/os-release matches the build
+  # environment, the same source stack-utils uses for OS_FLAVOUR.
+  local plan_args=(plan)
+  if [ -n "${arch}" ]; then
+    plan_args+=(--arch "${arch}")
+  fi
+  local plan
+  plan=$(podman run --rm \
+    --env OSS_ENDPOINT="${OSS_ENDPOINT:-}" \
+    --env OSS_ACCESS_KEY_ID="${OSS_ACCESS_KEY_ID:-}" \
+    --env OSS_ACCESS_KEY_SECRET="${OSS_ACCESS_KEY_SECRET:-}" \
+    --env GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/reconcile.py "${plan_args[@]}")
+  if [ -z "${plan}" ]; then
+    echo "reconcile: nothing to build"
+    return 0
+  fi
+  local ok=0 failed=0
+  while read -r item; do
+    [ -n "${item}" ] || continue
+    echo "reconcile: building ${item}"
+    # A dedicated process per item so set -e keeps its normal semantics
+    # inside build/upload (an if-context would disable it).
+    if SKIP_CREATE_BUILDPACK_DEP=1 bash "${CURRENT_DIR}/build.sh" all "${item}"; then
+      ok=$((ok + 1))
+    else
+      failed=$((failed + 1))
+      echo "reconcile: failed to build ${item}" >&2
+    fi
+  done <<< "${plan}"
+  echo "reconcile: done, ok=${ok} failed=${failed}"
+  [ "${failed}" -eq 0 ]
 }
 
 

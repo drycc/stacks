@@ -26,6 +26,27 @@ symlink_table = {
 }
 
 
+def _find_payload(tar):
+    """Return the name of the first real payload member, or None.
+
+    Works with both random-access and streaming tarfile objects. A real
+    payload is a regular file, symlink or hard link under data/ outside
+    data/profile.d/.
+    """
+    for member in tar:
+        name = member.name
+        if name.startswith("./"):
+            name = name[2:]
+        if not name.startswith("data/"):
+            continue
+        rest = name[len("data/"):].rstrip("/")
+        if not rest or rest == "profile.d" or rest.startswith("profile.d/"):
+            continue
+        if member.isfile() or member.issym() or member.islnk():
+            return member.name
+    return None
+
+
 def validate_package(filepath):
     """Raise ValueError unless the tar.gz archive holds a real payload.
 
@@ -36,22 +57,13 @@ def validate_package(filepath):
     """
     try:
         with tarfile.open(filepath, "r:gz") as tar:
-            for member in tar:
-                name = member.name
-                if name.startswith("./"):
-                    name = name[2:]
-                if not name.startswith("data/"):
-                    continue
-                rest = name[len("data/"):].rstrip("/")
-                if not rest or rest == "profile.d" or rest.startswith("profile.d/"):
-                    continue
-                if member.isfile() or member.issym() or member.islnk():
-                    return
+            payload = _find_payload(tar)
     except (tarfile.TarError, EOFError, OSError) as exc:
         raise ValueError("invalid stack package %s: %s" % (filepath, exc)) from exc
-    raise ValueError(
-        "stack package %s contains no payload files under data/ (profile.d excluded)" % filepath
-    )
+    if payload is None:
+        raise ValueError(
+            "stack package %s contains no payload files under data/ (profile.d excluded)" % filepath
+        )
 
 
 def upload(filename, filepath):

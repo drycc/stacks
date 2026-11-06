@@ -48,8 +48,8 @@ case " $* " in
     echo "$*" >> "${RECONCILE_TEST_STATE}/alerts"
     exit 0
     ;;
-  *"reconcile.py resolve"*)
-    echo "$*" >> "${RECONCILE_TEST_STATE}/resolves"
+  *"reconcile.py success"*)
+    echo "$*" >> "${RECONCILE_TEST_STATE}/successes"
     exit 0
     ;;
   *"reconcile.py"*)
@@ -105,6 +105,7 @@ run_reconcile() {
     # an empty GITHUB_TOKEN stays empty (the no-token test relies on that);
     # unset falls back to the fake token
     export GITHUB_TOKEN="${GITHUB_TOKEN-fake-token}"
+    export CI_COMMIT_SHA="${CI_COMMIT_SHA:-1111111111111111111111111111111111111111}"
     export RECONCILE_TEST_STATE="${root}/state"
     export RECONCILE_TEST_PLAN="${root}/plan"
     export RECONCILE_TEST_FAIL_VERSION="${fail_version}"
@@ -147,10 +148,12 @@ test_reconcile_builds_each_planned_item_and_reuses_the_image() {
   [ "${RESULT_BUILDS}" = "nginx@1.31.8,rustfs@1.0.4" ] || problems="${problems} builds=[${RESULT_BUILDS}]"
   [ "${RESULT_UPLOADS}" -eq 2 ] || problems="${problems} uploads=${RESULT_UPLOADS}"
   grep -q "ok=2 failed=0" "${RESULT_ROOT}/out.log" || problems="${problems} summary-missing"
-  [ "$(count_calls "${RESULT_ROOT}/state/resolves" "reconcile.py resolve")" -eq 2 ] \
-    || problems="${problems} resolves=$(count_calls "${RESULT_ROOT}/state/resolves" "reconcile.py resolve")"
-  grep -q -- "--stack nginx --version 1.31.8" "${RESULT_ROOT}/state/resolves" 2> /dev/null \
-    || problems="${problems} resolve-nginx-missing"
+  [ "$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")" -eq 2 ] \
+    || problems="${problems} successes=$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")"
+  grep -q -- "--stack nginx --version 1.31.8" "${RESULT_ROOT}/state/successes" 2> /dev/null \
+    || problems="${problems} success-nginx-missing"
+  grep -q -- "--env CI_COMMIT_SHA=" "${RESULT_ROOT}/state/successes" 2> /dev/null \
+    || problems="${problems} commit-sha-not-forwarded"
   [ "$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")" -eq 0 ] \
     || problems="${problems} unexpected-alert"
   if [ -z "${problems}" ]; then
@@ -175,8 +178,8 @@ test_reconcile_continues_after_a_failure_and_exits_non_zero() {
     || problems="${problems} alerts=$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")"
   grep -q -- "--stack badstack --version 9.9.9" "${RESULT_ROOT}/state/alerts" 2> /dev/null \
     || problems="${problems} alert-badstack-missing"
-  [ "$(count_calls "${RESULT_ROOT}/state/resolves" "reconcile.py resolve")" -eq 1 ] \
-    || problems="${problems} resolves=$(count_calls "${RESULT_ROOT}/state/resolves" "reconcile.py resolve")"
+  [ "$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")" -eq 1 ] \
+    || problems="${problems} successes=$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")"
   if [ -z "${problems}" ]; then
     report "reconcile continues after a failure and exits non-zero" 0
     rm -rf "${RESULT_ROOT}"
@@ -193,8 +196,8 @@ test_reconcile_without_github_token_skips_reporting() {
   [ "${RESULT_RC}" -ne 0 ] || problems="${problems} exit=0"
   [ -z "$(cat "${RESULT_ROOT}/state/alerts" 2> /dev/null)" ] \
     || problems="${problems} alerts-should-be-empty"
-  [ -z "$(cat "${RESULT_ROOT}/state/resolves" 2> /dev/null)" ] \
-    || problems="${problems} resolves-should-be-empty"
+  [ -z "$(cat "${RESULT_ROOT}/state/successes" 2> /dev/null)" ] \
+    || problems="${problems} successes-should-be-empty"
   grep -q "ok=1 failed=1" "${RESULT_ROOT}/out.log" || problems="${problems} summary-missing"
   if [ -z "${problems}" ]; then
     report "reconcile without github token skips reporting" 0

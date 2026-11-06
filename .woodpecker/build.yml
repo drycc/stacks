@@ -8,24 +8,6 @@ labels:
   platform: ${platform}
 
 steps:
-- name: publish-linux
-  image: bash
-  commands:
-  - ./build.sh all $CI_COMMIT_TAG
-  environment:
-    CODENAME:
-      from_secret: codename
-    OSS_ENDPOINT:
-      from_secret: oss_endpoint
-    OSS_ACCESS_KEY_ID:
-      from_secret: oss_access_key_id
-    OSS_ACCESS_KEY_SECRET:
-      from_secret: oss_access_key_secret
-    CONTAINER_PULL_SECRETS:
-      from_secret: container_pull_secrets
-  when:
-    event:
-    - tag
 - name: reconcile-linux
   image: bash
   commands:

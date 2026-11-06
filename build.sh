@@ -73,9 +73,10 @@ function symlink {
 
 function reconcile-report() {
   # Report a per-item build result to GitHub: "alert" creates a
-  # deduplicated issue for a failed build, "resolve" closes the open
-  # failure issue after a successful build. Reporting problems are logged
-  # but never change the reconcile exit status.
+  # deduplicated issue for a failed build; "success" records the build
+  # (a stack@version tag pointing at the built commit) and closes the
+  # open failure issue. Reporting problems are logged but never change
+  # the reconcile exit status.
   local action="${1:?action is required}"
   local stack="${2:?stack is required}"
   local version="${3:?version is required}"
@@ -86,6 +87,7 @@ function reconcile-report() {
   fi
   if ! podman run --rm \
     --env GITHUB_TOKEN="${GITHUB_TOKEN}" \
+    --env CI_COMMIT_SHA="${CI_COMMIT_SHA:-}" \
     -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
     -w "${CURRENT_DIR}" \
     "${BUILDPACK_DEP_IMAGE}" \
@@ -130,7 +132,7 @@ function reconcile {
     # inside build/upload (an if-context would disable it).
     if SKIP_CREATE_BUILDPACK_DEP=1 bash "${CURRENT_DIR}/build.sh" all "${item}"; then
       ok=$((ok + 1))
-      reconcile-report resolve "${item%@*}" "${item#*@}"
+      reconcile-report success "${item%@*}" "${item#*@}"
     else
       failed=$((failed + 1))
       echo "reconcile: failed to build ${item}" >&2
@@ -141,13 +143,6 @@ function reconcile {
   [ "${failed}" -eq 0 ]
 }
 
-
-function renew() {
-  git tag -d "$1"
-  git push origin :refs/tags/"$1"
-  git tag "$1"
-  git push --tag
-}
 
 function patch() {
     # Validate arguments

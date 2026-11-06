@@ -4,26 +4,29 @@ The OSS objects are the build-completion standard. This planner discovers
 upstream release candidates (via checker.discover_candidates), compares them
 against the objects that actually exist for the current arch and flavour,
 and prints one stack@version item per line to stdout. Statistics go to
-stderr. It never creates tags or issues for new builds, and an upstream or
-OSS failure aborts the run instead of producing a plan.
+stderr. An upstream or OSS failure aborts the run instead of producing a
+plan.
 
-The alert/resolve subcommands track per-item failures as deduplicated
-GitHub issues: "alert" creates one when a build fails (skipping if an
-issue with the same title is already open), "resolve" closes them once
-the item builds successfully.
+The alert subcommand tracks a failed build as a deduplicated GitHub issue
+(creating one only while none is open). The success subcommand records a
+successful build - a stack@version tag pointing at the commit that built
+it, purely as a human-readable history since the nightly cron is the only
+build path - and closes the open failure issue. Tags record builds; they
+never trigger them.
 
 Usage:
     python3 scripts/reconcile.py plan [--arch ARCH] [--flavour FLAVOUR]
         [--max-per-stack N] [--max-total N] [--stack NAME]
     python3 scripts/reconcile.py alert --stack NAME --version VERSION
         [--pipeline-url URL] [--arch ARCH] [--flavour FLAVOUR]
-    python3 scripts/reconcile.py resolve --stack NAME --version VERSION
-        [--arch ARCH] [--flavour FLAVOUR]
+    python3 scripts/reconcile.py success --stack NAME --version VERSION
+        [--sha SHA] [--arch ARCH] [--flavour FLAVOUR]
 """
 
 import argparse
 import os
 import platform
+import subprocess
 import sys
 
 import checker
@@ -300,6 +303,48 @@ def resolve_failures(stack, version, arch=None, flavour=None, session=None):
     return closed
 
 
+def _current_commit():
+    """The commit to point build-record tags at: CI_COMMIT_SHA when running
+    in a pipeline, git HEAD otherwise (the workspace is mounted into the
+    reporting container)."""
+    sha = os.environ.get("CI_COMMIT_SHA")
+    if sha:
+        return sha
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+
+
+def record_build(stack, version, sha=None, session=None):
+    """Create the stack@version tag recording a successfully built item.
+
+    The tag is lightweight, points at the build-time commit, and is a
+    record for humans: OSS objects remain the build-completion standard
+    and tags trigger nothing. Both matrix legs build the same item, so
+    whichever finishes first creates the tag and the other skips on the
+    422 "Reference already exists". Returns the created ref, or None
+    when the tag already exists or no GITHUB_TOKEN is available.
+    """
+    headers = _github_headers()
+    if headers is None:
+        print("reconcile: tag: GITHUB_TOKEN not set, skipping", file=sys.stderr)
+        return None
+    if session is None:
+        session = requests
+    ref = "refs/tags/%s@%s" % (stack, version)
+    if sha is None:
+        sha = _current_commit()
+    response = session.post(
+        "https://api.github.com/repos/drycc/stacks/git/refs",
+        json={"ref": ref, "sha": sha},
+        headers=headers,
+    )
+    if response.status_code == 422 and "already exists" in response.json().get("message", ""):
+        print("reconcile: tag: %s already exists, skipping" % ref, file=sys.stderr)
+        return None
+    response.raise_for_status()
+    print("reconcile: tag: created %s at %s" % (ref, sha[:12]), file=sys.stderr)
+    return ref
+
+
 def cmd_alert(args):
     try:
         alert_failure(
@@ -313,13 +358,25 @@ def cmd_alert(args):
     return 0
 
 
-def cmd_resolve(args):
+def cmd_success(args):
+    """Record a successful build: tag it and close its failure issues.
+
+    Either half may fail without stopping the other; the command exits
+    non-zero so the failure is visible in the logs, but build.sh treats
+    all reporting failures as non-fatal anyway.
+    """
+    problems = []
+    try:
+        record_build(args.stack, args.version, sha=args.sha)
+    except Exception as exc:  # noqa: BLE001 - reporting must not mask failures
+        print("reconcile: tag failed: %s" % exc, file=sys.stderr)
+        problems.append("tag")
     try:
         resolve_failures(args.stack, args.version, arch=args.arch, flavour=args.flavour)
     except Exception as exc:  # noqa: BLE001 - reporting must not mask failures
         print("reconcile: resolve failed: %s" % exc, file=sys.stderr)
-        return 1
-    return 0
+        problems.append("resolve")
+    return 1 if problems else 0
 
 
 def main(argv=None):
@@ -357,13 +414,17 @@ def main(argv=None):
     )
     alert_parser.add_argument("--arch", default=None, help="default: detected")
     alert_parser.add_argument("--flavour", default=None, help="default: detected")
-    resolve_parser = subparsers.add_parser(
-        "resolve", help="close the open failure issue after a successful build"
+    success_parser = subparsers.add_parser(
+        "success", help="record a successful build (tag it and close its failure issue)"
     )
-    resolve_parser.add_argument("--stack", required=True)
-    resolve_parser.add_argument("--version", required=True)
-    resolve_parser.add_argument("--arch", default=None, help="default: detected")
-    resolve_parser.add_argument("--flavour", default=None, help="default: detected")
+    success_parser.add_argument("--stack", required=True)
+    success_parser.add_argument("--version", required=True)
+    success_parser.add_argument(
+        "--sha", default=None,
+        help="commit to point the tag at (default: CI_COMMIT_SHA or git HEAD)",
+    )
+    success_parser.add_argument("--arch", default=None, help="default: detected")
+    success_parser.add_argument("--flavour", default=None, help="default: detected")
     args = parser.parse_args(argv)
     if args.command == "plan":
         if args.arch is None:
@@ -373,8 +434,8 @@ def main(argv=None):
         return cmd_plan(args)
     if args.command == "alert":
         return cmd_alert(args)
-    if args.command == "resolve":
-        return cmd_resolve(args)
+    if args.command == "success":
+        return cmd_success(args)
     return 2
 
 

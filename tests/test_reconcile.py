@@ -304,16 +304,35 @@ class CliTest(unittest.TestCase):
             ])
         self.assertEqual(rc, 1)
 
-    def test_cli_resolve_forwards_arguments(self):
-        with mock.patch("reconcile.resolve_failures", return_value=[7]) as resolve:
+    def test_cli_success_forwards_arguments(self):
+        with mock.patch("reconcile.record_build", return_value="refs/tags/nginx@1.31.8") as tag, \
+                mock.patch("reconcile.resolve_failures", return_value=[]) as resolve:
             rc = reconcile.main([
-                "resolve", "--stack", "nginx", "--version", "1.31.8",
-                "--arch", "amd64", "--flavour", "debian-13",
+                "success", "--stack", "nginx", "--version", "1.31.8",
+                "--sha", "a" * 40, "--arch", "amd64", "--flavour", "debian-13",
             ])
         self.assertEqual(rc, 0)
+        tag.assert_called_once_with("nginx", "1.31.8", sha="a" * 40)
         resolve.assert_called_once_with(
             "nginx", "1.31.8", arch="amd64", flavour="debian-13",
         )
+
+    def test_cli_success_returns_non_zero_when_reporting_fails(self):
+        with mock.patch("reconcile.record_build", side_effect=RuntimeError("github down")), \
+                mock.patch("reconcile.resolve_failures", side_effect=RuntimeError("github down")):
+            rc = reconcile.main([
+                "success", "--stack", "nginx", "--version", "1.31.8",
+            ])
+        self.assertEqual(rc, 1)
+
+    def test_cli_success_still_resolves_after_tagging_fails(self):
+        with mock.patch("reconcile.record_build", side_effect=RuntimeError("github down")), \
+                mock.patch("reconcile.resolve_failures", return_value=[7]) as resolve:
+            rc = reconcile.main([
+                "success", "--stack", "nginx", "--version", "1.31.8",
+            ])
+        self.assertEqual(rc, 1)
+        resolve.assert_called_once()
 
 
 class FakeAlertResponse:
@@ -330,18 +349,23 @@ class FakeAlertResponse:
 
 
 class AlertSession:
-    """Serves GitHub search results and the recent-open-issues listing,
-    recording every request as (method, url, params_or_json_body) tuples.
+    """Serves GitHub search results, the recent-open-issues listing and
+    tag-ref creation, recording every request as
+    (method, url, params_or_json_body) tuples.
 
     search_items feed the /search endpoint (indexed issues); recent_items
     feed the /issues listing (fresh issues the search index has not
-    ingested yet)."""
+    ingested yet). ref_status/ref_payload control the /git/refs POST
+    outcome (201 created, or 422 with a message)."""
 
-    def __init__(self, search_items, created_number=555, recent_items=None):
+    def __init__(self, search_items, created_number=555, recent_items=None,
+                 ref_status=201, ref_payload=None):
         self.requests = []
         self._search = {"total_count": len(search_items), "items": search_items}
         self._recent = recent_items or []
         self._created_number = created_number
+        self._ref_status = ref_status
+        self._ref_payload = ref_payload if ref_payload is not None else {}
 
     def get(self, url, params=None, headers=None, **kwargs):
         self.requests.append(("GET", url, params))
@@ -355,6 +379,8 @@ class AlertSession:
         self.requests.append(("POST", url, json))
         if url.endswith("/issues"):
             return FakeAlertResponse({"number": self._created_number})
+        if url.endswith("/git/refs"):
+            return FakeAlertResponse(self._ref_payload, status=self._ref_status)
         return FakeAlertResponse({})
 
     def patch(self, url, json=None, headers=None, **kwargs):
@@ -506,6 +532,126 @@ class FailureIssueResolveTest(unittest.TestCase):
         )
         self.assertEqual(closed, [])
         self.assertEqual(session.requests, [])
+
+
+class RecordBuildTest(unittest.TestCase):
+    """record_build tags a successfully built item as a build record.
+
+    The tag is purely informational - OSS objects stay the completion
+    standard - and points at the commit that was checked out when the
+    build ran. The nightly cron is the only build path, so tags never
+    trigger anything.
+    """
+
+    def setUp(self):
+        self._orig_token = os.environ.get("GITHUB_TOKEN")
+        os.environ["GITHUB_TOKEN"] = "test-token"
+        self._orig_sha = os.environ.pop("CI_COMMIT_SHA", None)
+
+    def tearDown(self):
+        if self._orig_token is None:
+            os.environ.pop("GITHUB_TOKEN", None)
+        else:
+            os.environ["GITHUB_TOKEN"] = self._orig_token
+        if self._orig_sha is not None:
+            os.environ["CI_COMMIT_SHA"] = self._orig_sha
+
+    def test_creates_the_stack_tag_pointing_at_the_build_commit(self):
+        session = AlertSession(search_items=[])
+        ref = reconcile.record_build("nginx", "1.31.8", sha="a" * 40, session=session)
+        self.assertEqual(ref, "refs/tags/nginx@1.31.8")
+        creations = [r for r in session.requests
+                     if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/git/refs")]
+        self.assertEqual(len(creations), 1)
+        self.assertEqual(
+            creations[0][2],
+            {"ref": "refs/tags/nginx@1.31.8", "sha": "a" * 40},
+        )
+
+    def test_skips_when_the_other_arch_leg_tagged_first(self):
+        # both matrix legs build the same item; whichever finishes first
+        # creates the tag and the second one gets a 422 "already exists"
+        session = AlertSession(
+            search_items=[],
+            ref_status=422,
+            ref_payload={"message": "Reference already exists"},
+        )
+        ref = reconcile.record_build("nginx", "1.31.8", sha="a" * 40, session=session)
+        self.assertIsNone(ref)
+
+    def test_a_422_that_is_not_a_duplicate_is_an_error(self):
+        session = AlertSession(
+            search_items=[],
+            ref_status=422,
+            ref_payload={"message": "Invalid request"},
+        )
+        with self.assertRaises(RuntimeError):
+            reconcile.record_build("nginx", "1.31.8", sha="a" * 40, session=session)
+
+    def test_sha_defaults_to_ci_commit_sha(self):
+        os.environ["CI_COMMIT_SHA"] = "b" * 40
+        session = AlertSession(search_items=[])
+        reconcile.record_build("nginx", "1.31.8", session=session)
+        creation = [r for r in session.requests
+                    if r[0] == "POST" and r[1].endswith("/git/refs")][0]
+        self.assertEqual(creation[2]["sha"], "b" * 40)
+
+    def test_without_token_makes_no_requests(self):
+        os.environ.pop("GITHUB_TOKEN", None)
+        session = AlertSession(search_items=[])
+        ref = reconcile.record_build("nginx", "1.31.8", sha="a" * 40, session=session)
+        self.assertIsNone(ref)
+        self.assertEqual(session.requests, [])
+
+
+class SuccessReportTest(unittest.TestCase):
+    """cmd_success: record the build tag and close failure issues in one
+    report call, tolerating either half failing."""
+
+    def setUp(self):
+        self._orig_token = os.environ.get("GITHUB_TOKEN")
+        os.environ["GITHUB_TOKEN"] = "test-token"
+        self._orig_sha = os.environ.pop("CI_COMMIT_SHA", None)
+
+    def tearDown(self):
+        if self._orig_token is None:
+            os.environ.pop("GITHUB_TOKEN", None)
+        else:
+            os.environ["GITHUB_TOKEN"] = self._orig_token
+        if self._orig_sha is not None:
+            os.environ["CI_COMMIT_SHA"] = self._orig_sha
+
+    def test_tags_the_item_and_closes_its_failure_issues(self):
+        title = "build failed for nginx@1.31.8 on amd64/debian-13"
+        session = AlertSession(search_items=[{"number": 77, "title": title}])
+        with mock.patch("reconcile.requests", session):
+            rc = reconcile.main([
+                "success", "--stack", "nginx", "--version", "1.31.8",
+                "--sha", "a" * 40, "--arch", "amd64", "--flavour", "debian-13",
+            ])
+        self.assertEqual(rc, 0)
+        ref_posts = [r for r in session.requests
+                     if r[0] == "POST" and r[1].endswith("/git/refs")]
+        self.assertEqual(len(ref_posts), 1)
+        self.assertEqual(ref_posts[0][2]["ref"], "refs/tags/nginx@1.31.8")
+        patches = [r for r in session.requests if r[0] == "PATCH"]
+        self.assertEqual(len(patches), 1)
+        self.assertTrue(patches[0][1].endswith("/issues/77"))
+
+    def test_a_duplicate_tag_still_closes_the_failure_issues(self):
+        title = "build failed for nginx@1.31.8 on amd64/debian-13"
+        session = AlertSession(
+            search_items=[{"number": 77, "title": title}],
+            ref_status=422,
+            ref_payload={"message": "Reference already exists"},
+        )
+        with mock.patch("reconcile.requests", session):
+            rc = reconcile.main([
+                "success", "--stack", "nginx", "--version", "1.31.8",
+                "--sha", "a" * 40, "--arch", "amd64", "--flavour", "debian-13",
+            ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(len([r for r in session.requests if r[0] == "PATCH"]), 1)
 
 
 if __name__ == "__main__":

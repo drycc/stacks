@@ -1,14 +1,14 @@
 """Tests for scripts/cleaner.py.
 
 The cleaner has one cleanup mode: per (stack, arch, flavour) group, keep
-the newest N versions and delete the older ones. It shares the retention
-rule with the nightly reconcile planner (checker.retention_keep), so
-versions pruned outside the window are not planned again. --skip-stack
-is an exclusion filter, not a second cleanup mode.
+the newest N versions and delete the older ones. The nightly planner
+rolls forward, so pruned versions are not planned again. A local
+retention list protects whole stacks (python) or exact versions
+(valkey==3.15) from deletion; it replaces the retired --skip-stack flag.
 
 Version-pointer symlinks (go-1.24 -> go-1.24.5 style) are never deleted;
-the tests pin that -n leaves them alone and that skipped stacks are
-excluded completely.
+the tests pin that -n leaves them alone and that retention list rules are
+honoured across arches and flavours.
 
 Run: .venv/bin/python -m unittest discover -s tests -p 'test_cleaner.py' -v
 """
@@ -16,6 +16,7 @@ Run: .venv/bin/python -m unittest discover -s tests -p 'test_cleaner.py' -v
 import io
 import os
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -103,6 +104,42 @@ class ParseObjectKeyTest(unittest.TestCase):
                 self.assertIsNone(checker.parse_object_key(key))
 
 
+class RetentionListParseTest(unittest.TestCase):
+    def test_parses_bare_stacks_and_exact_version_pins(self):
+        stacks, versions = cleaner.parse_retention_list([
+            "# currently used stacks\n",
+            "\n",
+            " python \n",
+            "valkey == 3.15 \n",
+            "redis==7.0.12\n",
+            "python\n",                 # duplicate
+            "valkey==3.15\n",           # duplicate
+        ])
+        self.assertEqual(stacks, {"python"})
+        self.assertEqual(versions, {("valkey", "3.15"), ("redis", "7.0.12")})
+
+    def test_single_equals_is_rejected_with_a_line_number(self):
+        with self.assertRaisesRegex(ValueError, r"line 2.*=="):
+            cleaner.parse_retention_list(["python\n", "valkey=3.15\n"])
+
+    def test_malformed_entries_are_rejected(self):
+        for entry in (
+            "==3.15",             # missing stack
+            "valkey==",           # missing version
+            "valkey==3.15==1",    # more than one separator
+            "val key",            # invalid stack name
+            "valkey==3.15 rc1",   # whitespace inside version
+        ):
+            with self.subTest(entry=entry):
+                with self.assertRaises(ValueError):
+                    cleaner.parse_retention_list([entry + "\n"])
+
+    def test_default_retention_list_file_is_valid(self):
+        stacks, versions = cleaner.load_retention_list(cleaner.DEFAULT_RETENTION_LIST)
+        self.assertTrue({"go", "java", "node", "php", "python", "ruby", "rust"} <= stacks)
+        self.assertTrue(versions)
+
+
 class RetentionGroupsTest(unittest.TestCase):
     def test_groups_real_objects_by_stack_arch_and_flavour(self):
         objects = [
@@ -133,20 +170,48 @@ class RetentionGroupsTest(unittest.TestCase):
         self.assertEqual(list(groups), [("go", "amd64", "debian-13")])
         self.assertEqual(skipped, {"symlinks": 1, "unparsed": 2})
 
-    def test_skip_stacks_excludes_their_groups(self):
+    def test_bare_stack_entries_are_excluded_from_their_groups(self):
         objects = [
             (go_key("1.24.5"), "Normal"),
             ("stacks/nginx/nginx-1.31.8-linux-amd64-debian-13.tar.gz", "Normal"),
         ]
-        groups, _ = cleaner.retention_groups(objects, skip_stacks={"go"})
+        groups, _ = cleaner.retention_groups(objects, protected_stacks={"go"})
         self.assertEqual(list(groups), [("nginx", "amd64", "debian-13")])
+
+
+    def test_exact_pins_veto_victims_and_are_reported_separately(self):
+        objects = [
+            (go_key("1.24.5"), "Normal"),
+            (go_key("1.24.4"), "Normal"),
+            (go_key("1.23.0"), "Normal"),
+            (go_key("1.22.0"), "Normal"),
+            (go_key("1.23.0", arch="arm64"), "Normal"),
+            (go_key("1.22.0", arch="arm64"), "Normal"),
+            (go_key("1.24.5", arch="arm64"), "Normal"),
+            (go_key("1.24.4", arch="arm64"), "Normal"),
+        ]
+        groups, _ = cleaner.retention_groups(objects)
+        victims, lines, protected = cleaner.retention_prune(
+            groups, 2, {("go", "1.23.0")})
+        self.assertEqual(victims, [go_key("1.22.0"), go_key("1.22.0", arch="arm64")])
+        self.assertEqual(protected, [go_key("1.23.0"), go_key("1.23.0", arch="arm64")])
+        summary = "\n".join(lines)
+        self.assertNotIn("deleting 1.23.0", summary)
+        self.assertEqual(summary.count("retention list protecting 1.23.0"), 2)
+
+    def test_a_pin_does_not_match_a_longer_version(self):
+        versions = ("3.16.0", "3.15.0", "3.14.0")
+        groups, _ = cleaner.retention_groups([(go_key(v), "Normal") for v in versions])
+        victims, _, protected = cleaner.retention_prune(groups, 1, {("go", "3.15")})
+        self.assertEqual(victims, [go_key("3.14.0"), go_key("3.15.0")])
+        self.assertEqual(protected, [])
 
 
 class RetentionPruneTest(unittest.TestCase):
     def test_deletes_only_versions_beyond_the_newest_n(self):
         versions = ("1.24.5", "1.24.4", "1.24.3", "1.23.0", "1.22.0")
         groups, _ = cleaner.retention_groups([(go_key(v), "Normal") for v in versions])
-        victims, lines = cleaner.retention_prune(groups, 3)
+        victims, lines, protected = cleaner.retention_prune(groups, 3)
         self.assertEqual(
             victims, [go_key("1.22.0"), go_key("1.23.0")],
         )
@@ -160,7 +225,7 @@ class RetentionPruneTest(unittest.TestCase):
         # 1.10.0 - the newest minor line
         versions = ("1.7.0", "1.8.0", "1.9.0", "1.10.0")
         groups, _ = cleaner.retention_groups([(go_key(v), "Normal") for v in versions])
-        victims, _ = cleaner.retention_prune(groups, 3)
+        victims, _, _ = cleaner.retention_prune(groups, 3)
         self.assertEqual(victims, [go_key("1.7.0")])
 
     def test_groups_are_pruned_independently(self):
@@ -168,7 +233,7 @@ class RetentionPruneTest(unittest.TestCase):
         objects += [(go_key("1.24.5", arch="arm64"), "Normal"),
                     (go_key("1.23.0", arch="arm64"), "Normal")]
         groups, _ = cleaner.retention_groups(objects)
-        victims, _ = cleaner.retention_prune(groups, 1)
+        victims, _, _ = cleaner.retention_prune(groups, 1)
         self.assertEqual(
             sorted(victims),
             sorted([go_key("1.23.0"), go_key("1.24.4"), go_key("1.24.3"),
@@ -179,13 +244,13 @@ class RetentionPruneTest(unittest.TestCase):
         # their age is unknown; checker.retention_keep always keeps them
         objects = [(go_key("weird"), "Normal"), (go_key("1.24.5"), "Normal")]
         groups, _ = cleaner.retention_groups(objects)
-        victims, _ = cleaner.retention_prune(groups, 1)
+        victims, _, _ = cleaner.retention_prune(groups, 1)
         self.assertEqual(victims, [])
 
     def test_groups_within_the_count_produce_no_victims(self):
         versions = ("1.24.5", "1.24.4")
         groups, _ = cleaner.retention_groups([(go_key(v), "Normal") for v in versions])
-        victims, lines = cleaner.retention_prune(groups, 3)
+        victims, lines, protected = cleaner.retention_prune(groups, 3)
         self.assertEqual(victims, [])
         self.assertEqual(lines, [])
 
@@ -200,6 +265,17 @@ class RetentionCliTest(unittest.TestCase):
             FakeObject(go_key("1.24"), "Symlink"),  # version pointer
         ]
         self.bucket = FakeBucket()
+        # Keep these tests independent of the repository's real retention list.
+        self._tmp = tempfile.TemporaryDirectory()
+        retention_list = os.path.join(self._tmp.name, "retention_list.txt")
+        with open(retention_list, "w") as f:
+            f.write("")
+        self._default = mock.patch("cleaner.DEFAULT_RETENTION_LIST", retention_list, create=True)
+        self._default.start()
+
+    def tearDown(self):
+        self._default.stop()
+        self._tmp.cleanup()
 
     def run_cli(self, argv, inputs=None):
         stdout = io.StringIO()
@@ -251,7 +327,7 @@ class RetentionCliTest(unittest.TestCase):
 
     def test_suffix_option_is_rejected(self):
         # the suffix purge was retired: -n retention is the only cleanup
-        # mode, and --skip-stack is its exclusion filter, not a second mode
+        # mode, and the retention list is its protection filter, not a second mode
         with mock.patch("cleaner._oss_bucket", return_value=self.bucket), \
                 mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
             with self.assertRaises(SystemExit) as ctx:
@@ -275,22 +351,28 @@ def nginx_key(version, arch="amd64", flavour="debian-13"):
     return "stacks/nginx/nginx-%s-linux-%s-%s.tar.gz" % (version, arch, flavour)
 
 
-class SkipStacksCliTest(unittest.TestCase):
-    """--skip-stack protects named stacks from -n, including their
-    symlinks. Stacks are named by their OSS directory, repeatable or
-    comma-separated."""
-
+class RetentionListCliTest(unittest.TestCase):
     def setUp(self):
         self.objects = [
             FakeObject(go_key("1.24.5")),
             FakeObject(go_key("1.24.4")),
             FakeObject(go_key("1.23.0")),
+            FakeObject(go_key("1.22.0")),
             FakeObject(go_key("1.24"), "Symlink"),
             FakeObject(nginx_key("1.31.9")),
             FakeObject(nginx_key("1.31.8")),
             FakeObject(nginx_key("1.30.0")),
         ]
         self.bucket = FakeBucket()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.retention_list_path = os.path.join(self._tmp.name, "retention_list.txt")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def write_retention_list(self, text):
+        with open(self.retention_list_path, "w") as f:
+            f.write(text)
 
     def run_cli(self, argv):
         stdout = io.StringIO()
@@ -298,30 +380,101 @@ class SkipStacksCliTest(unittest.TestCase):
                 mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)), \
                 mock.patch("builtins.input", side_effect=["y"]), \
                 redirect_stdout(stdout):
-            rc = cleaner.main(argv)
+            try:
+                rc = cleaner.main(argv + ["--retention-list", self.retention_list_path])
+            except SystemExit as exc:
+                rc = exc.code
         return rc, stdout.getvalue()
 
-    def test_n_skips_the_named_stacks(self):
-        rc, out = self.run_cli(
-            ["oss-stacks", "-n", "2", "--skip-stack", "go", "--confirm"])
+    def test_bare_stack_protects_every_version(self):
+        self.write_retention_list("go\n")
+        rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [nginx_key("1.30.0")])
-        self.assertIn("excluding stack(s): go", out)
+        self.assertIn("1 stack rule(s)", out)
 
-    def test_comma_separated_skip_list(self):
-        rc, out = self.run_cli(
-            ["oss-stacks", "-n", "2", "--skip-stack", "go,nginx", "--confirm"])
+    def test_exact_pin_is_an_extra_veto_outside_retention(self):
+        self.write_retention_list("go==1.23.0\n")
+        rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            self.bucket.deleted,
+            [go_key("1.22.0"), nginx_key("1.30.0")],
+        )
+        self.assertIn("1 protected object(s)", out)
+        self.assertIn("2 object(s) scheduled for deletion", out)
+        self.assertIn("keeping 3 of 4", out)
+        self.assertIn("retention list protecting 1.23.0", out)
+        self.assertNotIn("deleting 1.22.0, 1.23.0", out)
+
+    def test_all_outdated_versions_protected_still_reports_the_protection(self):
+        self.objects = [
+            FakeObject(go_key("1.24.5")),
+            FakeObject(go_key("1.24.4")),
+            FakeObject(go_key("1.23.0")),
+        ]
+        self.write_retention_list("go==1.23.0\n")
+        rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [])
-        self.assertIn("excluding stack(s): go,nginx", out)
+        self.assertIn("retention list protecting 1.23.0", out)
+        self.assertIn("all versions beyond retention are protected by the retention list", out)
+        self.assertNotIn("every group is within the retention count", out)
 
-    def test_repeatable_skip_flags(self):
-        rc, _ = self.run_cli([
-            "oss-stacks", "-n", "2",
-            "--skip-stack", "go", "--skip-stack", "nginx", "--confirm",
-        ])
+    def test_a_pin_does_not_change_the_underlying_retention_ranking(self):
+        # 1.24.4 is already inside newest-2, so the pin protects no
+        # additional object and both older versions are still pruned.
+        self.write_retention_list("go==1.24.4\n")
+        rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
         self.assertEqual(rc, 0)
-        self.assertEqual(self.bucket.deleted, [])
+        self.assertEqual(
+            self.bucket.deleted,
+            [go_key("1.22.0"), go_key("1.23.0"), nginx_key("1.30.0")],
+        )
+        self.assertIn("0 protected object(s)", out)
+
+    def test_missing_retention_list_aborts_before_oss(self):
+        missing = os.path.join(self._tmp.name, "missing.txt")
+        with mock.patch("cleaner.DEFAULT_RETENTION_LIST", missing, create=True), \
+                mock.patch("cleaner._oss_bucket", return_value=self.bucket) as bucket, \
+                mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
+            with self.assertRaises(SystemExit) as ctx:
+                cleaner.main(["oss-stacks", "-n", "2", "--dry-run"])
+        self.assertEqual(ctx.exception.code, 2)
+        bucket.assert_not_called()
+
+    def test_malformed_retention_list_aborts_before_oss(self):
+        self.write_retention_list("go=1.23.0\n")
+        with mock.patch("cleaner.DEFAULT_RETENTION_LIST", self.retention_list_path, create=True), \
+                mock.patch("cleaner._oss_bucket", return_value=self.bucket) as bucket, \
+                mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
+            with self.assertRaises(SystemExit) as ctx:
+                cleaner.main(["oss-stacks", "-n", "2", "--dry-run"])
+        self.assertEqual(ctx.exception.code, 2)
+        bucket.assert_not_called()
+
+    def test_skip_stack_option_is_rejected(self):
+        self.write_retention_list("")
+        with mock.patch("cleaner.DEFAULT_RETENTION_LIST", self.retention_list_path, create=True), \
+                mock.patch("cleaner._oss_bucket", return_value=self.bucket), \
+                mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
+            with self.assertRaises(SystemExit) as ctx:
+                cleaner.main([
+                    "oss-stacks", "-n", "2", "--skip-stack", "go", "--dry-run",
+                ])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_legacy_whitelist_option_is_rejected(self):
+        self.write_retention_list("")
+        with mock.patch("cleaner.DEFAULT_RETENTION_LIST", self.retention_list_path, create=True), \
+                mock.patch("cleaner._oss_bucket", return_value=self.bucket), \
+                mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
+            with self.assertRaises(SystemExit) as ctx:
+                cleaner.main([
+                    "oss-stacks", "-n", "2", "--whitelist", self.retention_list_path,
+                    "--dry-run",
+                ])
+        self.assertEqual(ctx.exception.code, 2)
 
 
 if __name__ == "__main__":

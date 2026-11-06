@@ -289,7 +289,7 @@ class CleanerPlannerInteractionTest(unittest.TestCase):
         existing = [key("rustfs", version) for version in existing_versions]
         groups, _ = cleaner.retention_groups(
             [(object_key, "Normal") for object_key in existing])
-        victims, _ = cleaner.retention_prune(groups, cleaner_count)
+        victims, _, _ = cleaner.retention_prune(groups, cleaner_count)
         bucket = FakeBucket(set(existing) - set(victims))
         discover = fake_discover(
             {"rustfs": [

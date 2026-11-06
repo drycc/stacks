@@ -43,7 +43,7 @@ steps:
       from_secret: container_pull_secrets
     GITHUB_TOKEN:
       from_secret: github_token
-    RECONCILE_DRY_RUN: "1"
+    RECONCILE_DRY_RUN: "0"
   when:
     event:
     - cron

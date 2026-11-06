@@ -1,520 +1,220 @@
 #!/usr/bin/env python3
 """
-Git Repository Cleaner and OSS Stack Cleaner
+OSS stack cleaner: keep only the newest N versions of each stack.
 
-This script provides various cleanup operations for git repositories, GitHub issues,
-and OSS stack files.
+Old binaries are never used by the Docker builds, which only reference
+the current versions. The nightly reconcile planner rolls forward from
+the newest OSS version and never backfills older holes, so versions
+pruned by this cleaner are not planned again - even when the planner
+and cleaner use different N values. checker.retention_keep provides the
+shared semantic version ordering.
 
-Usage:
-    python cleaner.py tags -n 3 [--dry-run] [--confirm]
-    python cleaner.py issues --max-issues 100 [--dry-run]
-    python cleaner.py oss-stacks -n 3 [--dry-run]
+    python cleaner.py oss-stacks -n 3 [--dry-run] [--confirm]
+    python cleaner.py oss-stacks -n 3 \
+        --skip-stack go,java,node,php,python,ruby,rust --dry-run
+
+  -n N: per (stack, arch, flavour) group, keep the newest N versions by
+        semantic order and delete the older ones. Required.
+  --skip-stack NAME: exclude a stack (repeatable, or comma-separated),
+        e.g. preserve the full history of the language runtimes.
+
+Version-pointer symlinks (go-1.24 -> go-1.24.5 style) are never deleted,
+but -n may delete their targets, leaving the pointers to 404. Exclude
+stacks whose pointers and full version history must stay intact (the
+language runtimes listed above) with --skip-stack.
 """
 
 import argparse
-import subprocess
-import sys
 import os
-import requests
+import sys
+
 import oss2
-import re
-from collections import defaultdict
-from typing import List, Dict, Tuple
-from packaging import version
+from packaging.version import parse as parse_version
+
+import checker
+
+BUCKET_NAME = 'drycc'
 
 
-def run_command(command: List[str], dry_run: bool = False) -> str:
-    """Execute a shell command or print it in dry-run mode."""
-    cmd_str = ' '.join(command)
-
-    if dry_run:
-        print(f"[DRY RUN] Would execute: {cmd_str}")
-        return ""
-
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        print(f"Error executing command: {cmd_str}")
-        print(f"Error: {e.stderr}")
-        return ""
+def _oss_bucket():
+    return oss2.Bucket(
+        oss2.Auth(
+            os.environ.get("OSS_ACCESS_KEY_ID"),
+            os.environ.get("OSS_ACCESS_KEY_SECRET"),
+        ),
+        os.environ.get("OSS_ENDPOINT", "http://oss-accelerate.aliyuncs.com"),
+        BUCKET_NAME,
+    )
 
 
-def get_all_tags() -> List[str]:
-    """Get all git tags from the repository."""
-    try:
-        result = subprocess.run(['git', 'tag', '-l'], capture_output=True, text=True, check=True)
-        return result.stdout.strip().split('\n') if result.stdout.strip() else []
-    except subprocess.CalledProcessError as e:
-        print(f"Error getting tags: {e.stderr}")
-        return []
+def iter_stack_objects(bucket, iterate=None):
+    """Yield (key, type) for every object under stacks/."""
+    if iterate is None:
+        iterate = oss2.ObjectIterator
+    for obj in iterate(bucket, prefix='stacks/'):
+        yield obj.key, obj.type
 
 
-def parse_tag(tag: str) -> Tuple[str, str]:
-    """Parse a tag into stack name and version."""
-    if '@' not in tag:
-        raise ValueError(f"Invalid tag format: {tag}. Expected format: stack-name@version")
+def retention_groups(objects, skip_stacks=()):
+    """Group real (non-symlink) stack objects for retention cleanup.
 
-    stack_name, version = tag.split('@', 1)
-    if not stack_name or not version:
-        raise ValueError(f"Invalid tag format: {tag}")
-
-    return stack_name, version
-
-
-def group_tags_by_stack(tags: List[str]) -> Dict[str, List[Tuple[str, str]]]:
-    """Group tags by stack name and sort versions for each stack."""
-    stacks = defaultdict(list)
-
-    for tag in tags:
-        try:
-            stack_name, version = parse_tag(tag)
-            stacks[stack_name].append((tag, version))
-        except ValueError as e:
-            print(f"Warning: {e}", file=sys.stderr)
+    objects: an iterable of (key, type) pairs. Returns (groups, skipped):
+    groups maps (stack, arch, flavour) -> {version: key}; skipped counts
+    the symlinks and the keys that do not follow the artifact layout -
+    neither is ever deleted by -n. Stacks named in skip_stacks are
+    excluded entirely.
+    """
+    skip = frozenset(skip_stacks)
+    groups = {}
+    skipped = {"symlinks": 0, "unparsed": 0}
+    for key, type_ in objects:
+        if type_ == "Symlink":
+            skipped["symlinks"] += 1
             continue
-
-    # Sort versions for each stack (newest first)
-    for stack_name in stacks:
-        stacks[stack_name].sort(key=lambda x: x[1], reverse=True)
-
-    return stacks
-
-
-def get_tags_to_delete(stacks: Dict[str, List[Tuple[str, str]]], keep_count: int) -> List[str]:
-    """Determine which tags should be deleted based on keep_count."""
-    tags_to_delete = []
-
-    for stack_name, tags in stacks.items():
-        if len(tags) > keep_count:
-            tags_to_delete.extend([tag[0] for tag in tags[keep_count:]])
-
-    return tags_to_delete
+        parsed = checker.parse_object_key(key)
+        if parsed is None:
+            skipped["unparsed"] += 1
+            continue
+        stack, version, arch, flavour = parsed
+        if stack in skip:
+            continue
+        groups.setdefault((stack, arch, flavour), {})[version] = key
+    return groups, skipped
 
 
-def delete_tag(tag: str, dry_run: bool = False) -> bool:
-    """Delete a tag both locally and remotely."""
-    print(f"Processing tag: {tag}")
+def retention_prune(groups, count):
+    """Plan the retention prune.
 
-    # Delete local tag
-    local_result = run_command(['git', 'tag', '-d', tag], dry_run)
-    print(f"Delete local tag: {local_result}")
-    # Delete remote tag
-    remote_result = run_command(['git', 'push', 'origin', f':refs/tags/{tag}'], dry_run)
-    print(f"Delete remote tag: {remote_result}")
-    return True
+    Returns (victims, lines): victims is the flat list of keys to delete
+    to bring every group within its newest `count` versions, and lines
+    holds one human-readable summary line per group that loses
+    versions. checker.retention_keep decides what stays (semantic order,
+    unparseable versions always kept). Every victim is older than the
+    group's newest retained version, and the nightly planner only rolls
+    forward from that boundary, so victims are never rebuilt.
+    """
+    victims = []
+    lines = []
+    for (stack, arch, flavour), versions in sorted(groups.items()):
+        retained = checker.retention_keep(list(versions), count)
+        doomed = sorted(
+            (version for version in versions if version not in retained),
+            key=parse_version,  # oldest first; every doomed version is parseable
+        )
+        if not doomed:
+            continue
+        lines.append(
+            "  %s linux-%s-%s: keeping %d of %d versions, deleting %s"
+            % (stack, arch, flavour, len(retained), len(versions),
+               ", ".join(doomed))
+        )
+        victims.extend(versions[version] for version in doomed)
+    return victims, lines
 
 
-def clean_tags(args):
-    """Clean up old git tags for stacks."""
-    if args.keep_count < 1:
-        print("Error: keep-count must be at least 1", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Git Tag Cleaner - Keeping {args.keep_count} latest versions per stack")
-
-    # Get all tags
-    all_tags = get_all_tags()
-    if not all_tags:
-        print("No tags found in repository")
-        return
-
-    print(f"Found {len(all_tags)} total tags")
-
-    # Group tags by stack
-    stacks = group_tags_by_stack(all_tags)
-    print(f"Found {len(stacks)} stacks")
-
-    # Show tag distribution
-    for stack_name, tags in sorted(stacks.items()):
-        print(f"  {stack_name}: {len(tags)} versions")
-
-    # Get tags to delete
-    tags_to_delete = get_tags_to_delete(stacks, args.keep_count)
-
-    if not tags_to_delete:
-        print("No tags to delete - all stacks have <= {} versions".format(args.keep_count))
-        return
-
-    print(f"\nFound {len(tags_to_delete)} tags to delete:")
-    for tag in sorted(tags_to_delete):
-        print(f"  - {tag}")
-
-    # Confirm deletion
-    if not args.dry_run and not args.confirm:
-        response = input(f"\nDelete these {len(tags_to_delete)} tags? (y/N): ")
-        if response.lower() != 'y':
-            print("Aborted by user")
-            return
-
-    # Delete tags
-    success_count = 0
-    for tag in tags_to_delete:
+def delete_objects(bucket, keys, dry_run=False):
+    """Delete each key; returns the number of successful deletions."""
+    deleted = 0
+    for key in keys:
         try:
-            delete_tag(tag, args.dry_run)
-            success_count += 1
-        except Exception as e:
-            print(f"Error deleting tag {tag}: {e}", file=sys.stderr)
-
-    print(f"\nCompleted: {success_count}/{len(tags_to_delete)} tags processed")
-
-
-def clean_github_issues(args):
-    """Clean GitHub issues to keep only the most recent ones."""
-    github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
-
-    if not os.environ.get("GITHUB_TOKEN"):
-        print("Error: GITHUB_TOKEN environment variable is required")
-        return
-
-    max_issues = args.max_issues
-    all_issues = _fetch_all_issues(github_headers)
-
-    if len(all_issues) <= max_issues:
-        print(f"No issues to clean. Found {len(all_issues)} total issues, keeping {max_issues}")
-        return
-
-    issues_to_process = all_issues[max_issues:]
-    print(f"Found {len(all_issues)} total issues")
-    print(f"Will keep {max_issues} most recent issues")
-    print(f"Will close and delete {len(issues_to_process)} oldest issues")
-
-    for issue in issues_to_process:
-        _process_issue_with_graphql(issue, args.dry_run, github_headers)
-
-
-def _fetch_all_issues(headers: Dict[str, str]) -> List[Dict]:
-    """Fetch all GitHub issues with pagination."""
-    all_issues = []
-    page = 1
-    per_page = 100
-
-    while True:
-        issues_url = "https://api.github.com/repos/drycc/stacks/issues"
-        params = {
-            'state': 'all',
-            'sort': 'created',
-            'direction': 'desc',
-            'per_page': per_page,
-            'page': page
-        }
-
-        try:
-            response = requests.get(issues_url, headers=headers, params=params)
-            response.raise_for_status()
-            issues = response.json()
-
-            if not issues:
-                break
-
-            all_issues.extend(issues)
-            page += 1
-
-            if page > 50:  # Max 5000 issues
-                break
-
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching issues on page {page}: {e}")
-            break
-
-    return all_issues
-
-
-def _process_issue_with_graphql(issue: Dict, dry_run: bool, headers: Dict[str, str]) -> None:
-    """Process a single issue using GraphQL API to delete by node_id."""
-    import time
-
-    issue_number = issue['number']
-    issue_title = issue['title']
-
-    if dry_run:
-        print(f"[DRY RUN] Would delete issue #{issue_number}: {issue_title}")
-        return
-
-    # First, get the node_id for the issue
-    node_id = _get_issue_node_id(issue_number, headers)
-    if not node_id:
-        print(f"Could not get node_id for issue #{issue_number}, attempting to close instead")
-        _close_issue(issue_number, issue_title, headers)
-        return
-
-    # Use GraphQL to delete the issue
-    graphql_url = "https://api.github.com/graphql"
-    graphql_query = {
-        "query": f'mutation {{ deleteIssue(input: {{issueId: "{node_id}"}}) {{ clientMutationId }} }}'
-    }
-
-    try:
-        response = requests.post(graphql_url, headers=headers, json=graphql_query)
-        response.raise_for_status()
-        
-        result = response.json()
-        if 'errors' in result:
-            error_message = result['errors'][0].get('message', 'Unknown error')
-            print(f"GraphQL error deleting issue #{issue_number}: {error_message}")
-            print(f"Attempting to close issue #{issue_number} instead")
-            _close_issue(issue_number, issue_title, headers)
-        else:
-            print(f"Deleted issue #{issue_number}: {issue_title}")
-    except requests.exceptions.RequestException as e:
-        print(f"Error deleting issue #{issue_number} via GraphQL: {e}")
-        print(f"Attempting to close issue #{issue_number} instead")
-        _close_issue(issue_number, issue_title, headers)
-
-    time.sleep(0.2)  # Rate limiting
-
-
-def _get_issue_node_id(issue_number: int, headers: Dict[str, str]) -> str:
-    """Get the node_id for a specific issue number."""
-    issue_url = f"https://api.github.com/repos/drycc/stacks/issues/{issue_number}"
-    
-    try:
-        response = requests.get(issue_url, headers=headers)
-        response.raise_for_status()
-        issue_data = response.json()
-        return issue_data.get('node_id')
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching node_id for issue #{issue_number}: {e}")
-        return None
-
-
-def _close_issue(issue_number: int, issue_title: str, headers: Dict[str, str]) -> None:
-    """Close an issue if deletion fails."""
-    close_url = f"https://api.github.com/repos/drycc/stacks/issues/{issue_number}"
-    close_data = {'state': 'closed'}
-
-    try:
-        close_response = requests.patch(close_url, headers=headers, json=close_data)
-        close_response.raise_for_status()
-        print(f"Closed issue #{issue_number}: {issue_title} (could not delete)")
-    except requests.exceptions.RequestException as e:
-        print(f"Error closing issue #{issue_number}: {e}")
-
-
-def parse_oss_filename(filename: str) -> Tuple[str, str, str]:
-    s0, s1 = filename.split("/")[-1].split("-linux-")
-    def parse_version(full_name):
-        parts = full_name.split('-')
-        for i in range(len(parts)):
-            potential_version = '-'.join(parts[i:])
-            try:
-                version.parse(potential_version)
-                software_name = '-'.join(parts[:i]) if i > 0 else None
-                return software_name, potential_version
-            except version.InvalidVersion:
-                continue
-        raise ValueError(f"Could not parse version from {full_name}")
-    os_name = s1.rstrip('.tar.gz')
-    stack_name, stack_version = parse_version(s0)
-    return stack_name, stack_version, os_name
+            if dry_run:
+                print(f"[DRY RUN] Would delete: {key}")
+            else:
+                bucket.delete_object(key)
+                print(f"Deleted: {key}")
+            deleted += 1
+        except Exception as exc:
+            print(f"Error deleting {key}: {exc}", file=sys.stderr)
+    return deleted
 
 
 def clean_oss_stacks(args):
-    """Clean up old OSS stack files, keeping only the latest n versions per stack per OS."""
-    # Initialize OSS bucket
+    """Delete versions outside the newest-N retention window."""
     try:
-        bucket = oss2.Bucket(
-            oss2.Auth(
-                os.environ.get("OSS_ACCESS_KEY_ID"),
-                os.environ.get("OSS_ACCESS_KEY_SECRET"),
-            ),
-            os.environ.get("OSS_ENDPOINT", "http://oss-accelerate.aliyuncs.com"),
-            'drycc'
-        )
-    except Exception as e:
-        print(f"Error initializing OSS bucket: {e}")
-        sys.exit(1)
+        bucket = _oss_bucket()
+    except Exception as exc:
+        print(f"Error initializing OSS bucket: {exc}")
+        return 1
 
-    # List all objects in the stacks directory
-    print("Listing OSS objects...")
-    object_keys = []
-    try:
-        for obj in oss2.ObjectIterator(bucket, prefix='stacks/'):
-            if obj.key.endswith('.tar.gz'):
-                object_keys.append(obj.key)
-    except Exception as e:
-        print(f"Error listing OSS objects: {e}")
-        sys.exit(1)
+    groups, skipped = retention_groups(
+        iter_stack_objects(bucket), skip_stacks=args.skip_stacks)
+    keys, detail = retention_prune(groups, args.keep_count)
+    header = (f"Retention: keep the newest {args.keep_count} version(s) per"
+              f" stack/arch/flavour, {len(keys)} object(s) beyond it")
+    if skipped["symlinks"]:
+        header += f", skipping {skipped['symlinks']} symlink(s)"
+    if skipped["unparsed"]:
+        header += f", skipping {skipped['unparsed']} unparsable key(s)"
+    if args.skip_stacks:
+        header += ", excluding stack(s): %s" % ",".join(args.skip_stacks)
+    if not keys:
+        print(header)
+        print("Nothing to delete: every group is within the retention count.")
+        return 0
 
-    if not object_keys:
-        print("No stack files found in OSS")
-        return
+    print(header)
+    for line in detail:
+        print(line)
 
-    print(f"Found {len(object_keys)} stack files")
+    if not args.dry_run and not args.confirm:
+        response = input(f"\nDelete these {len(keys)} objects? (y/N): ")
+        if response.lower() != 'y':
+            print("Aborted by user")
+            return 0
 
-    # Handle suffix-based deletion
-    if hasattr(args, 'subfix') and args.subfix is not None:
-        print(f"OSS Stack Cleaner - Deleting files with suffix: {args.subfix}")
-        
-        # Find files matching the suffix
-        files_to_delete = []
-        for obj_key in object_keys:
-            # Check if the filename ends with the specified suffix
-            filename = obj_key.split('/')[-1]  # Get just the filename part
-            if filename.endswith(args.subfix):
-                files_to_delete.append(obj_key)
-        
-        if not files_to_delete:
-            print(f"No files found matching suffix: {args.subfix}")
-            return
-
-        print(f"\nFound {len(files_to_delete)} files to delete:")
-        for obj_key in sorted(files_to_delete):
-            print(f"  - {obj_key}")
-
-        # Confirm deletion
-        if not args.dry_run:
-            response = input(f"\nDelete these {len(files_to_delete)} files? (y/N): ")
-            if response.lower() != 'y':
-                print("Aborted by user")
-                return
-
-        # Delete files
-        success_count = 0
-        for obj_key in files_to_delete:
-            try:
-                if args.dry_run:
-                    print(f"[DRY RUN] Would delete: {obj_key}")
-                else:
-                    bucket.delete_object(obj_key)
-                    print(f"Deleted: {obj_key}")
-                success_count += 1
-            except Exception as e:
-                print(f"Error deleting {obj_key}: {e}", file=sys.stderr)
-
-        print(f"\nCompleted: {success_count}/{len(files_to_delete)} files processed")
-        return
-
-    # Handle keep-count based deletion (existing logic)
-    if hasattr(args, 'keep_count') and args.keep_count is not None:
-        if args.keep_count < 1:
-            print("Error: keep-count must be at least 1", file=sys.stderr)
-            sys.exit(1)
-        print(f"OSS Stack Cleaner - Keeping {args.keep_count} latest versions per stack per OS")
-        
-        # Parse and group files by stack and OS
-        stack_os_files = defaultdict(list)
-        
-        for obj_key in object_keys:
-            try:
-                stack_name, stack_version, os_name = parse_oss_filename(obj_key)
-                package_version = version.parse(stack_version)
-                main_version = f"{package_version.major}.{package_version.micro}"
-                stack_os_files[(stack_name, os_name, main_version)].append((obj_key, stack_version))
-            except ValueError as e:
-                print(f"Warning: Skipping invalid filename {obj_key}: {e}")
-                continue
-
-        # Sort versions for each stack-OS combination (newest first)
-        for key in stack_os_files:
-            stack_os_files[key].sort(key=lambda x: version.parse(x[1]), reverse=True)
-
-        # Determine which files to delete
-        files_to_delete = []
-        
-        for (stack_name, os_name, _), files in stack_os_files.items():
-            if len(files) > args.keep_count:
-                # Keep the first n files (newest), delete the rest
-                files_to_delete.extend([file_info[0] for file_info in files[args.keep_count:]])
-                print(f"Stack '{stack_name}' OS '{os_name}': keeping {args.keep_count} versions, deleting {len(files) - args.keep_count}")
-
-        if not files_to_delete:
-            print("No files to delete - all stacks have <= {} versions per OS".format(args.keep_count))
-            return
-
-        print(f"\nFound {len(files_to_delete)} files to delete:")
-        for obj_key in sorted(files_to_delete):
-            print(f"  - {obj_key}")
-
-        # Confirm deletion
-        if not args.dry_run:
-            response = input(f"\nDelete these {len(files_to_delete)} files? (y/N): ")
-            if response.lower() != 'y':
-                print("Aborted by user")
-                return
-
-        # Delete files
-        success_count = 0
-        for obj_key in files_to_delete:
-            try:
-                if args.dry_run:
-                    print(f"[DRY RUN] Would delete: {obj_key}")
-                else:
-                    bucket.delete_object(obj_key)
-                    print(f"Deleted: {obj_key}")
-                success_count += 1
-            except Exception as e:
-                print(f"Error deleting {obj_key}: {e}", file=sys.stderr)
-
-        print(f"\nCompleted: {success_count}/{len(files_to_delete)} files processed")
+    deleted = delete_objects(bucket, sorted(keys), args.dry_run)
+    print(f"\nCompleted: {deleted}/{len(keys)} objects processed")
+    return 0 if deleted == len(keys) else 1
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
-        description='Git repository cleaner with various cleanup operations',
+        description='OSS stack cleaner: keep the newest N versions per stack',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python cleaner.py tags -n 3              # Keep 3 latest versions per stack
-  python cleaner.py tags -n 5 --dry-run    # Preview tag cleanup
-  python cleaner.py tags -n 2 --confirm    # Skip confirmation prompt
-  python cleaner.py issues --max-issues 50 # Keep 50 most recent issues
-  python cleaner.py issues --dry-run       # Preview issue cleanup
-  python cleaner.py oss-stacks -n 3        # Keep 3 latest versions per stack per OS
-  python cleaner.py oss-stacks -n 2 --dry-run # Preview OSS stack cleanup
-  python cleaner.py oss-stacks -s linux-arm64-debian-12.tar.gz # Delete files with specific suffix
-  python cleaner.py oss-stacks -s linux-amd64-debian-12.tar.gz --dry-run # Preview suffix-based deletion
+  python cleaner.py oss-stacks -n 3                                     # Keep the newest 3 versions per stack/arch/flavour
+  python cleaner.py oss-stacks -n 3 --dry-run                           # Preview the retention prune
+  python cleaner.py oss-stacks -n 3 --skip-stack go,java,node,php,python,ruby,rust
+                                                                        # Prune everything except the language runtimes
 
-Note: Issues cleanup requires admin permissions to delete issues.
-If deletion fails, issues will be closed instead.
+The nightly reconcile planner shares checker.retention_keep, so versions
+pruned outside the retention window are not planned again. Symlinks are
+never deleted; use --skip-stack for stacks whose version pointers and
+full history must remain intact.
         """
     )
-
     subparsers = parser.add_subparsers(dest='action', help='Cleanup action to perform')
 
-    # Tags cleanup parser
-    tags_parser = subparsers.add_parser('tags', help='Clean up old git tags')
-    tags_parser.add_argument('-n', '--keep-count', type=int, required=True,
-                            help='Number of latest versions to keep for each stack')
-    tags_parser.add_argument('--dry-run', action='store_true',
-                            help='Only print commands without executing them')
-    tags_parser.add_argument('--confirm', action='store_true',
-                            help='Skip confirmation prompt and execute directly')
-
-    # Issues cleanup parser
-    issues_parser = subparsers.add_parser('issues', help='Clean up GitHub issues')
-    issues_parser.add_argument('--max-issues', type=int, default=100,
-                              help='Maximum number of issues to keep (default: 100)')
-    issues_parser.add_argument('--dry-run', action='store_true',
-                             help='Only print commands without executing them')
-
-    # OSS stacks cleanup parser
-    oss_parser = subparsers.add_parser('oss-stacks', help='Clean up old OSS stack files')
+    oss_parser = subparsers.add_parser(
+        'oss-stacks', help='Delete OSS stack versions beyond the newest N')
+    oss_parser.add_argument(
+        '-n', '--keep-count', type=int, required=True,
+        help='keep the newest N versions per stack/arch/flavour and delete the older ones')
+    oss_parser.add_argument(
+        '--skip-stack', action='append', dest='skip_stacks', default=[],
+        help='stack to exclude, named by its OSS directory'
+             ' (repeatable, or comma-separated: go,java,node)')
     oss_parser.add_argument('--dry-run', action='store_true',
-                           help='Only print commands without executing them')
-    
-    # Make -n and -s mutually exclusive
-    oss_group = oss_parser.add_mutually_exclusive_group(required=True)
-    oss_group.add_argument('-n', '--keep-count', type=int,
-                          help='Number of latest versions to keep for each stack per OS')
-    oss_group.add_argument('-s', '--subfix', type=str,
-                          help='Suffix pattern to match files for deletion (e.g., linux-arm64-debian-12.tar.gz)')
+                            help='Only list the matching objects without deleting them')
+    oss_parser.add_argument('--confirm', action='store_true',
+                            help='Skip the confirmation prompt')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.action:
         parser.print_help()
-        sys.exit(1)
+        return 1
 
-    if args.action == 'tags':
-        clean_tags(args)
-    elif args.action == 'issues':
-        clean_github_issues(args)
-    elif args.action == 'oss-stacks':
-        clean_oss_stacks(args)
-    else:
-        parser.error(f"Unknown action: {args.action}")
+    if args.action == 'oss-stacks':
+        args.skip_stacks = [
+            name for chunk in args.skip_stacks for name in chunk.split(",") if name
+        ]
+        if args.keep_count < 1:
+            oss_parser.error("--keep-count must be at least 1")
+        return clean_oss_stacks(args)
+    parser.error(f"Unknown action: {args.action}")
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

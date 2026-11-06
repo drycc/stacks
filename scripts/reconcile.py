@@ -7,6 +7,17 @@ and prints one stack@version item per line to stdout. Statistics go to
 stderr. An upstream or OSS failure aborts the run instead of producing a
 plan.
 
+Only candidates newer than the newest version already stored for the
+current stack/arch/flavour are eligible. The newest N of those eligible
+candidates form the planning window (checker.retention_keep). Older
+holes are never backfilled - even when they are among the newest N
+upstream releases - because old binaries are not used by Docker builds.
+This roll-forward rule also means cleaner.py can delete older OSS
+objects without scheduling a rebuild, including when OSS contains
+versions upstream discovery did not return or the tools use different
+N values. Missing versions inside the effective window are still built,
+subject to the per-run caps.
+
 The alert subcommand tracks a failed build as a deduplicated GitHub issue
 (creating one only while none is open). The success subcommand records a
 successful build - a stack@version tag pointing at the commit that built
@@ -16,7 +27,7 @@ never trigger them.
 
 Usage:
     python3 scripts/reconcile.py plan [--arch ARCH] [--flavour FLAVOUR]
-        [--max-per-stack N] [--max-total N] [--stack NAME]
+        [--max-per-stack N] [--max-total N] [--retention N] [--stack NAME]
     python3 scripts/reconcile.py alert --stack NAME --version VERSION
         [--pipeline-url URL] [--arch ARCH] [--flavour FLAVOUR]
     python3 scripts/reconcile.py success --stack NAME --version VERSION
@@ -32,6 +43,7 @@ import sys
 import checker
 import requests
 import storage
+from packaging.version import InvalidVersion, parse
 
 
 def object_key(stack, version, arch, flavour):
@@ -87,13 +99,49 @@ def list_existing_keys(bucket, prefix):
         marker = result.next_marker
 
 
+def _newest_existing_version(existing, stack, arch, flavour):
+    """The newest parseable version already stored for this exact
+    stack/arch/flavour, or None when there is none.
+
+    Existing-only versions matter: upstream discovery is a limited tag
+    page, so the newest OSS object may not appear in the candidates.
+    Unparseable versions are ignored here (and retained by the cleaner),
+    since they cannot establish a semantic ordering boundary.
+    """
+    newest = None
+    for object_key in existing:
+        parsed = checker.parse_object_key(object_key)
+        if parsed is None:
+            continue
+        key_stack, version, key_arch, key_flavour = parsed
+        if (key_stack, key_arch, key_flavour) != (stack, arch, flavour):
+            continue
+        try:
+            parsed_version = parse(version)
+        except InvalidVersion:
+            continue
+        if newest is None or parsed_version > newest:
+            newest = parsed_version
+    return newest
+
+
 def build_plan(arch, flavour, stacks=None, discover=None, bucket=None,
-               max_per_stack=1, max_total=10):
+               max_per_stack=1, max_total=10, retention=checker.DEFAULT_RETENTION):
     """Reconcile upstream candidates against OSS and pick what to build.
 
-    Returns (chosen, deferred): chosen is a list of candidate dicts, newest
-    first, capped at max_total with at most max_per_stack per stack; deferred
-    counts the missing versions left for later runs.
+    Returns (chosen, deferred, dropped): chosen is a list of candidate
+    dicts, newest first, capped at max_total with at most max_per_stack
+    per stack; deferred counts the eligible missing versions left for
+    later runs; dropped counts missing versions outside the effective
+    planning window.
+
+    The planner rolls forward: a candidate is eligible only when it is
+    newer than the newest version already stored for this exact
+    stack/arch/flavour. The newest N of those eligible candidates form
+    the retention window (checker.retention_keep). Older holes are never
+    backfilled, so versions deleted by the cleaner cannot be rebuilt -
+    even when OSS contains versions upstream discovery did not return,
+    or when the cleaner uses a different N.
     """
     if discover is None:
         discover = checker.discover_candidates
@@ -103,16 +151,35 @@ def build_plan(arch, flavour, stacks=None, discover=None, bucket=None,
         stacks = default_stacks()
     chosen = []
     deferred = 0
+    dropped = 0
     for stack in stacks:
         candidates = discover(stack)
         if not candidates:
             continue
         existing = list_existing_keys(bucket, "stacks/%s/%s-" % (stack, stack))
-        missing = [
-            candidate
-            for candidate in candidates
-            if object_key(stack, candidate["version"], arch, flavour) not in existing
-        ]
+        newest_existing = _newest_existing_version(existing, stack, arch, flavour)
+        eligible = []
+        for candidate in candidates:
+            if newest_existing is None:
+                eligible.append(candidate)
+                continue
+            try:
+                if parse(candidate["version"]) > newest_existing:
+                    eligible.append(candidate)
+            except InvalidVersion:
+                # retention_keep applies the same conservative rule:
+                # unknown-age versions are not discarded by a guess.
+                eligible.append(candidate)
+        kept = set(checker.retention_keep(
+            [candidate["version"] for candidate in eligible], retention))
+        missing = []
+        for candidate in candidates:
+            if object_key(stack, candidate["version"], arch, flavour) in existing:
+                continue
+            if candidate["version"] in kept:
+                missing.append(candidate)
+            else:
+                dropped += 1
         chosen.extend(missing[:max_per_stack])
         deferred += max(0, len(missing) - max_per_stack)
     chosen.sort(
@@ -126,17 +193,18 @@ def build_plan(arch, flavour, stacks=None, discover=None, bucket=None,
     if len(chosen) > max_total:
         deferred += len(chosen) - max_total
         chosen = chosen[:max_total]
-    return chosen, deferred
+    return chosen, deferred, dropped
 
 
 def cmd_plan(args):
     try:
-        chosen, deferred = build_plan(
+        chosen, deferred, dropped = build_plan(
             arch=args.arch,
             flavour=args.flavour,
             stacks=args.stacks,
             max_per_stack=args.max_per_stack,
             max_total=args.max_total,
+            retention=args.retention,
         )
     except Exception as exc:  # noqa: BLE001 - abort rather than mis-plan
         print("reconcile: planning failed: %s" % exc, file=sys.stderr)
@@ -144,8 +212,8 @@ def cmd_plan(args):
     for candidate in chosen:
         print("%s@%s" % (candidate["stack"], candidate["version"]))
     print(
-        "reconcile: arch=%s flavour=%s, %d to build, %d deferred"
-        % (args.arch, args.flavour, len(chosen), deferred),
+        "reconcile: arch=%s flavour=%s, %d to build, %d deferred, %d outside retention"
+        % (args.arch, args.flavour, len(chosen), deferred, dropped),
         file=sys.stderr,
     )
     return 0
@@ -401,6 +469,11 @@ def main(argv=None):
         help="max items per run (default: 10)",
     )
     plan_parser.add_argument(
+        "--retention", type=int, default=checker.DEFAULT_RETENTION,
+        help="newest versions kept per stack, shared with cleaner.py"
+             " (default: %d)" % checker.DEFAULT_RETENTION,
+    )
+    plan_parser.add_argument(
         "--stack", action="append", dest="stacks",
         help="limit planning to this stack (repeatable)",
     )
@@ -427,6 +500,8 @@ def main(argv=None):
     success_parser.add_argument("--flavour", default=None, help="default: detected")
     args = parser.parse_args(argv)
     if args.command == "plan":
+        if args.retention < 1:
+            plan_parser.error("--retention must be at least 1")
         if args.arch is None:
             args.arch = detect_arch()
         if args.flavour is None:

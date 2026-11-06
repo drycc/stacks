@@ -259,6 +259,46 @@ class JqTagPatternTest(unittest.TestCase):
                 self.assertIsNone(re.fullmatch(self.pattern, tag))
 
 
+class RetentionKeepTest(unittest.TestCase):
+    """retention_keep provides the shared semantic ordering: the nightly
+    planner applies it to candidates newer than the current OSS boundary,
+    and the cleaner applies it to existing versions. The planner's
+    roll-forward rule guarantees cleanup never schedules a rebuild."""
+
+    def test_keeps_the_newest_versions_by_semantic_order(self):
+        kept = checker.retention_keep(["1.9.0", "1.10.0", "1.31.0", "1.8.0"], 3)
+        self.assertEqual(kept, ["1.31.0", "1.10.0", "1.9.0"])
+
+    def test_semantic_not_lexicographic_order(self):
+        # lexicographic order ranks "1.9.0" above "1.10.0" and would keep
+        # the old series while dropping the newest minor line
+        kept = checker.retention_keep(["1.7.0", "1.8.0", "1.9.0", "1.10.0"], 3)
+        self.assertEqual(kept, ["1.10.0", "1.9.0", "1.8.0"])
+
+    def test_fewer_versions_than_the_count_keeps_everything(self):
+        kept = checker.retention_keep(["4.9", "4.52"], 3)
+        self.assertEqual(kept, ["4.52", "4.9"])
+
+    def test_unparseable_versions_are_always_kept(self):
+        # their age is unknown, so dropping them would be a guess
+        kept = checker.retention_keep(["1.0.0", "not-a-version!", "0.9.0"], 1)
+        self.assertEqual(kept, ["1.0.0", "not-a-version!"])
+
+    def test_count_below_one_is_rejected(self):
+        with self.assertRaises(ValueError):
+            checker.retention_keep(["1.0.0"], 0)
+
+    def test_default_retention_is_the_shared_constant(self):
+        # DEFAULT_RETENTION is the planner default and the reference for
+        # the cleaner's required -n value; it must stay a plain int so
+        # both tools share one retention rule without extra configuration.
+        self.assertIsInstance(checker.DEFAULT_RETENTION, int)
+        versions = ["1.0.%d" % i for i in range(8)]
+        kept = checker.retention_keep(versions)
+        self.assertEqual(len(kept), checker.DEFAULT_RETENTION)
+        self.assertEqual(kept[0], "1.0.7")
+
+
 class NoSideEffectsTest(unittest.TestCase):
     """checker.py is a pure discovery library.
 

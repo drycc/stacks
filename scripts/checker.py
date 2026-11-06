@@ -3,6 +3,13 @@ import re
 import json
 import requests
 from datetime import datetime, timezone
+from packaging.version import InvalidVersion, parse
+
+
+# The shared retention rule: every stack keeps the newest N versions.
+# The reconcile planner only builds inside this window and the OSS
+# cleaner only deletes outside it, so cleanup never schedules a rebuild.
+DEFAULT_RETENTION = 3
 
 
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
@@ -477,6 +484,62 @@ def normalize_version(tag_name):
     if re.search(replace_regex, version):
         version = re.subn(replace_regex, ".", version)[0].strip(".")
     return version
+
+
+def parse_object_key(key):
+    """stacks/<stack>/<stack>-<version>-linux-<arch>-<flavour>.tar.gz ->
+    (stack, version, arch, flavour), or None when the key does not
+    follow the artifact layout (directory markers, foreign names).
+
+    The version is whatever sits between "<stack>-" and "-linux-" so
+    hyphenated stack names stay intact, and the flavour is the rest of
+    the tail so hyphenated flavours do too. Shared by the planner and
+    the cleaner so both interpret OSS objects identically.
+    """
+    if not key.startswith("stacks/") or not key.endswith(".tar.gz"):
+        return None
+    parts = key.split("/")
+    if len(parts) != 3:
+        return None
+    stack, basename = parts[1], parts[2]
+    if not basename.startswith(stack + "-"):
+        return None
+    body = basename[len(stack) + 1:]
+    version, marker, tail = body.partition("-linux-")
+    if not marker:
+        return None
+    arch, sep, flavour = tail.removesuffix(".tar.gz").partition("-")
+    if not sep or arch not in ("amd64", "arm64") or not flavour:
+        return None
+    return stack, version, arch, flavour
+
+
+def retention_keep(versions, count=DEFAULT_RETENTION):
+    """Return the versions kept by the shared retention rule: the newest
+    `count` versions by semantic order (packaging.version.parse), newest
+    first.
+
+    The reconcile planner and the OSS cleaner both use this semantic
+    ordering helper. The planner additionally rolls forward from the
+    newest object already stored for the current arch/flavour, so a
+    version pruned by the cleaner is never selected for rebuilding.
+    Semantic order (not lexicographic) matters: "1.10.0" is newer than
+    "1.9.0".
+
+    Versions that cannot be parsed are always kept: their age is
+    unknown, so dropping them would be a guess.
+    """
+    if count < 1:
+        raise ValueError("retention count must be at least 1")
+    ranked = []
+    unknown = []
+    for value in versions:
+        try:
+            ranked.append((parse(value), value))
+        except InvalidVersion:
+            unknown.append(value)
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    return [value for _, value in ranked[:count]] + unknown
 
 
 github_tags_graphql = """

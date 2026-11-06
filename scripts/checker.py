@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 from packaging.version import InvalidVersion, parse
 
 
-# The shared retention rule: every stack keeps the newest N versions.
-# The reconcile planner only builds inside this window and the OSS
-# cleaner only deletes outside it, so cleanup never schedules a rebuild.
-DEFAULT_RETENTION = 3
+# The shared retention rule: every (stack, version series) keeps the
+# newest N versions. The reconcile planner only builds inside these
+# per-series windows and the OSS cleaner only deletes outside them, so
+# cleanup never schedules a rebuild.
+DEFAULT_RETENTION = 2
 
 
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
@@ -514,17 +515,25 @@ def parse_object_key(key):
     return stack, version, arch, flavour
 
 
+def version_series(value):
+    """Return the retention series: drop only the final dot-separated
+    component. For example 13.4 -> 13, 8.0.1 -> 8.0 and 4.52 -> 4.
+    A value without a dot is its own series.
+    """
+    head, separator, _ = value.rpartition(".")
+    return head if separator else value
+
+
 def retention_keep(versions, count=DEFAULT_RETENTION):
     """Return the versions kept by the shared retention rule: the newest
     `count` versions by semantic order (packaging.version.parse), newest
     first.
 
     The reconcile planner and the OSS cleaner both use this semantic
-    ordering helper. The planner additionally rolls forward from the
-    newest object already stored for the current arch/flavour, so a
-    version pruned by the cleaner is never selected for rebuilding.
-    Semantic order (not lexicographic) matters: "1.10.0" is newer than
-    "1.9.0".
+    ordering helper within each version series. The planner rolls forward
+    from the newest object in the same series, so a version pruned by the
+    cleaner is never selected for rebuilding. Semantic order (not
+    lexicographic) matters: "1.10.0" is newer than "1.9.0".
 
     Versions that cannot be parsed are always kept: their age is
     unknown, so dropping them would be a guess.

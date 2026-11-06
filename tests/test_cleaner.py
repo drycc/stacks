@@ -1,10 +1,11 @@
 """Tests for scripts/cleaner.py.
 
-The cleaner has one cleanup mode: per (stack, arch, flavour) group, keep
-the newest N versions and delete the older ones. The nightly planner
-rolls forward, so pruned versions are not planned again. A local
-retention list protects whole stacks (python) or exact versions
-(valkey==3.15) from deletion; it replaces the retired --skip-stack flag.
+The cleaner has one cleanup mode: per (stack, series, arch, flavour)
+group, keep the newest N versions and delete the older ones. The nightly
+planner rolls forward within the same series, so pruned versions are not
+planned again. A local retention list protects whole stacks (python) or
+exact versions (valkey==3.15) from deletion; it replaces the retired
+--skip-stack flag.
 
 Version-pointer symlinks (go-1.24 -> go-1.24.5 style) are never deleted;
 the tests pin that -n leaves them alone and that retention list rules are
@@ -33,17 +34,33 @@ class FakeObject:
         self.type = type_
 
 
+class FakeSymlinkResult:
+    def __init__(self, target_key):
+        self.target_key = target_key
+
+
 class FakeBucket:
     def __init__(self):
         self.deleted = []
+        self.symlinks = {}
+        self.symlink_calls = []
 
     def delete_object(self, key):
         self.deleted.append(key)
+
+    def get_symlink(self, key):
+        self.symlink_calls.append(key)
+        return FakeSymlinkResult(self.symlinks.get(key, key))
 
 
 class FailingBucket(FakeBucket):
     def delete_object(self, key):
         raise RuntimeError("oss down")
+
+
+class FailingSymlinkBucket(FakeBucket):
+    def get_symlink(self, key):
+        raise RuntimeError("symlink lookup failed")
 
 
 def fake_iterate(objects):
@@ -150,11 +167,11 @@ class RetentionGroupsTest(unittest.TestCase):
         groups, skipped = cleaner.retention_groups(objects)
         self.assertEqual(
             sorted(groups),
-            [("go", "amd64", "debian-12"), ("go", "amd64", "debian-13"),
-             ("go", "arm64", "debian-13")],
+            [("go", "1.24", "amd64", "debian-12"), ("go", "1.24", "amd64", "debian-13"),
+             ("go", "1.24", "arm64", "debian-13")],
         )
         self.assertEqual(
-            groups[("go", "amd64", "debian-13")],
+            groups[("go", "1.24", "amd64", "debian-13")],
             {"1.24.5": "stacks/go/go-1.24.5-linux-amd64-debian-13.tar.gz"},
         )
         self.assertEqual(skipped, {"symlinks": 0, "unparsed": 0})
@@ -167,7 +184,7 @@ class RetentionGroupsTest(unittest.TestCase):
             ("stacks/other/go-1.24.5-linux-amd64-debian-13.tar.gz", "Normal"),
         ]
         groups, skipped = cleaner.retention_groups(objects)
-        self.assertEqual(list(groups), [("go", "amd64", "debian-13")])
+        self.assertEqual(list(groups), [("go", "1.24", "amd64", "debian-13")])
         self.assertEqual(skipped, {"symlinks": 1, "unparsed": 2})
 
     def test_bare_stack_entries_are_excluded_from_their_groups(self):
@@ -176,68 +193,74 @@ class RetentionGroupsTest(unittest.TestCase):
             ("stacks/nginx/nginx-1.31.8-linux-amd64-debian-13.tar.gz", "Normal"),
         ]
         groups, _ = cleaner.retention_groups(objects, protected_stacks={"go"})
-        self.assertEqual(list(groups), [("nginx", "amd64", "debian-13")])
+        self.assertEqual(list(groups), [("nginx", "1.31", "amd64", "debian-13")])
 
 
     def test_exact_pins_veto_victims_and_are_reported_separately(self):
-        objects = [
-            (go_key("1.24.5"), "Normal"),
-            (go_key("1.24.4"), "Normal"),
-            (go_key("1.23.0"), "Normal"),
-            (go_key("1.22.0"), "Normal"),
-            (go_key("1.23.0", arch="arm64"), "Normal"),
-            (go_key("1.22.0", arch="arm64"), "Normal"),
-            (go_key("1.24.5", arch="arm64"), "Normal"),
-            (go_key("1.24.4", arch="arm64"), "Normal"),
-        ]
+        versions = ("1.24.5", "1.24.4", "1.24.3", "1.24.2", "1.24.1")
+        objects = [(go_key(version), "Normal") for version in versions]
+        objects += [(go_key(version, arch="arm64"), "Normal") for version in versions]
         groups, _ = cleaner.retention_groups(objects)
         victims, lines, protected = cleaner.retention_prune(
-            groups, 2, {("go", "1.23.0")})
-        self.assertEqual(victims, [go_key("1.22.0"), go_key("1.22.0", arch="arm64")])
-        self.assertEqual(protected, [go_key("1.23.0"), go_key("1.23.0", arch="arm64")])
+            groups, 2, {("go", "1.24.3")})
+        self.assertEqual(
+            victims,
+            [go_key("1.24.1"), go_key("1.24.2"),
+             go_key("1.24.1", arch="arm64"), go_key("1.24.2", arch="arm64")],
+        )
+        self.assertEqual(
+            protected,
+            [go_key("1.24.3"), go_key("1.24.3", arch="arm64")],
+        )
         summary = "\n".join(lines)
-        self.assertNotIn("deleting 1.23.0", summary)
-        self.assertEqual(summary.count("retention list protecting 1.23.0"), 2)
+        self.assertNotIn("deleting 1.24.3", summary)
+        self.assertEqual(summary.count("retention list protecting 1.24.3"), 2)
 
     def test_a_pin_does_not_match_a_longer_version(self):
-        versions = ("3.16.0", "3.15.0", "3.14.0")
+        versions = ("3.15.1", "3.15.0")
         groups, _ = cleaner.retention_groups([(go_key(v), "Normal") for v in versions])
         victims, _, protected = cleaner.retention_prune(groups, 1, {("go", "3.15")})
-        self.assertEqual(victims, [go_key("3.14.0"), go_key("3.15.0")])
+        self.assertEqual(victims, [go_key("3.15.0")])
         self.assertEqual(protected, [])
 
 
 class RetentionPruneTest(unittest.TestCase):
     def test_deletes_only_versions_beyond_the_newest_n(self):
-        versions = ("1.24.5", "1.24.4", "1.24.3", "1.23.0", "1.22.0")
+        versions = ("1.24.5", "1.24.4", "1.24.3", "1.24.2", "1.24.1")
         groups, _ = cleaner.retention_groups([(go_key(v), "Normal") for v in versions])
         victims, lines, protected = cleaner.retention_prune(groups, 3)
         self.assertEqual(
-            victims, [go_key("1.22.0"), go_key("1.23.0")],
+            victims, [go_key("1.24.1"), go_key("1.24.2")],
         )
         self.assertEqual(len(lines), 1)
-        self.assertIn("go linux-amd64-debian-13", lines[0])
+        self.assertIn("go/1.24 linux-amd64-debian-13", lines[0])
         self.assertIn("keeping 3 of 5", lines[0])
-        self.assertIn("deleting 1.22.0, 1.23.0", lines[0])
+        self.assertIn("deleting 1.24.1, 1.24.2", lines[0])
+
+    def test_each_series_has_an_independent_retention_window(self):
+        versions = ("7.18.2", "7.18.1", "8.0.1", "8.0.0")
+        groups, _ = cleaner.retention_groups([(go_key(v), "Normal") for v in versions])
+        victims, _, _ = cleaner.retention_prune(groups, 1)
+        self.assertEqual(victims, [go_key("7.18.1"), go_key("8.0.0")])
 
     def test_ranks_semantically_not_lexicographically(self):
-        # lexicographic order would keep 1.9.0/1.8.0/1.7.0 and delete
-        # 1.10.0 - the newest minor line
-        versions = ("1.7.0", "1.8.0", "1.9.0", "1.10.0")
+        # lexicographic order would keep 1.31.9/1.31.8/1.31.7 and delete
+        # 1.31.10 - the newest patch in the same series
+        versions = ("1.31.7", "1.31.8", "1.31.9", "1.31.10")
         groups, _ = cleaner.retention_groups([(go_key(v), "Normal") for v in versions])
         victims, _, _ = cleaner.retention_prune(groups, 3)
-        self.assertEqual(victims, [go_key("1.7.0")])
+        self.assertEqual(victims, [go_key("1.31.7")])
 
     def test_groups_are_pruned_independently(self):
-        objects = [(go_key(v), "Normal") for v in ("1.24.5", "1.24.4", "1.24.3", "1.23.0")]
+        objects = [(go_key(v), "Normal") for v in ("1.24.5", "1.24.4", "1.24.3")]
         objects += [(go_key("1.24.5", arch="arm64"), "Normal"),
-                    (go_key("1.23.0", arch="arm64"), "Normal")]
+                    (go_key("1.24.4", arch="arm64"), "Normal")]
         groups, _ = cleaner.retention_groups(objects)
         victims, _, _ = cleaner.retention_prune(groups, 1)
         self.assertEqual(
             sorted(victims),
-            sorted([go_key("1.23.0"), go_key("1.24.4"), go_key("1.24.3"),
-                    go_key("1.23.0", arch="arm64")]),
+            sorted([go_key("1.24.4"), go_key("1.24.3"),
+                    go_key("1.24.4", arch="arm64")]),
         )
 
     def test_unparseable_versions_are_kept(self):
@@ -261,7 +284,7 @@ class RetentionCliTest(unittest.TestCase):
             FakeObject(go_key("1.24.5")),
             FakeObject(go_key("1.24.4")),
             FakeObject(go_key("1.24.3")),
-            FakeObject(go_key("1.23.0")),
+            FakeObject(go_key("1.24.2")),
             FakeObject(go_key("1.24"), "Symlink"),  # version pointer
         ]
         self.bucket = FakeBucket()
@@ -290,9 +313,10 @@ class RetentionCliTest(unittest.TestCase):
     def test_confirm_prunes_beyond_top_n(self):
         rc, out = self.run_cli(["oss-stacks", "-n", "3", "--confirm"])
         self.assertEqual(rc, 0)
-        self.assertEqual(self.bucket.deleted, [go_key("1.23.0")])
+        self.assertEqual(self.bucket.deleted, [go_key("1.24.2")])
         self.assertIn("keeping 3 of 4", out)
-        self.assertIn("deleting 1.23.0", out)
+        self.assertIn("per series/arch/flavour", out)
+        self.assertIn("deleting 1.24.2", out)
 
     def test_symlinks_are_never_deleted(self):
         self.run_cli(["oss-stacks", "-n", "3", "--confirm"])
@@ -302,7 +326,7 @@ class RetentionCliTest(unittest.TestCase):
         rc, out = self.run_cli(["oss-stacks", "-n", "3", "--dry-run"], inputs=[])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [])
-        self.assertIn("[DRY RUN] Would delete: %s" % go_key("1.23.0"), out)
+        self.assertIn("[DRY RUN] Would delete: %s" % go_key("1.24.2"), out)
 
     def test_declined_prompt_keeps_objects(self):
         rc, out = self.run_cli(["oss-stacks", "-n", "3"], inputs=["n"])
@@ -351,17 +375,123 @@ def nginx_key(version, arch="amd64", flavour="debian-13"):
     return "stacks/nginx/nginx-%s-linux-%s-%s.tar.gz" % (version, arch, flavour)
 
 
+class SymlinkAndArchCliTest(unittest.TestCase):
+    def setUp(self):
+        self.bucket = FakeBucket()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.retention_list = os.path.join(self._tmp.name, "retention-list.txt")
+        with open(self.retention_list, "w") as f:
+            f.write("")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def run_cli(self, objects, argv):
+        stdout = io.StringIO()
+        with mock.patch("cleaner._oss_bucket", return_value=self.bucket), \
+                mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(objects)), \
+                mock.patch("builtins.input", side_effect=["y"]), \
+                redirect_stdout(stdout):
+            try:
+                rc = cleaner.main(argv + ["--retention-list", self.retention_list])
+            except SystemExit as exc:
+                rc = exc.code
+        return rc, stdout.getvalue()
+
+    def test_only_the_symlink_and_its_target_are_protected(self):
+        objects = [
+            FakeObject(go_key("1.24.13")),
+            FakeObject(go_key("1.24.12")),
+            FakeObject(go_key("1.24.11")),
+            FakeObject(go_key("1.24"), "Symlink"),
+        ]
+        self.bucket.symlinks[go_key("1.24")] = go_key("1.24.12")
+        rc, out = self.run_cli(objects, ["oss-stacks", "-n", "1", "--confirm"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.bucket.deleted, [go_key("1.24.11")])
+        self.assertNotIn(go_key("1.24.12"), self.bucket.deleted)
+        self.assertIn("symlink protecting 1.24.12", out)
+
+    def test_symlink_target_failure_aborts_before_deletion(self):
+        self.bucket = FailingSymlinkBucket()
+        objects = [
+            FakeObject(go_key("1.24.13")),
+            FakeObject(go_key("1.24.12")),
+            FakeObject(go_key("1.24"), "Symlink"),
+        ]
+        rc, _ = self.run_cli(objects, ["oss-stacks", "-n", "1", "--confirm"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.bucket.deleted, [])
+
+    def test_arch_filter_limits_deletion_and_target_lookups(self):
+        objects = []
+        for arch in ("amd64", "arm64"):
+            objects.extend([
+                FakeObject(go_key("1.24.13", arch=arch)),
+                FakeObject(go_key("1.24.12", arch=arch)),
+                FakeObject(go_key("1.24.11", arch=arch)),
+                FakeObject(go_key("1.24", arch=arch), "Symlink"),
+            ])
+            self.bucket.symlinks[go_key("1.24", arch=arch)] = go_key("1.24.12", arch=arch)
+        rc, out = self.run_cli(objects, ["oss-stacks", "-n", "1", "--arch", "arm64", "--confirm"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.bucket.deleted, [go_key("1.24.11", arch="arm64")])
+        self.assertEqual(self.bucket.symlink_calls, [go_key("1.24", arch="arm64")])
+        self.assertIn("skipping 1 symlink(s)", out)
+
+
+    def test_unparsable_symlink_aborts_instead_of_deleting_its_target(self):
+        objects = [
+            FakeObject("stacks/nginx/latest.tar.gz", "Symlink"),
+            FakeObject(nginx_key("1.31.9")),
+            FakeObject(nginx_key("1.31.8")),
+        ]
+        self.bucket.symlinks["stacks/nginx/latest.tar.gz"] = nginx_key("1.31.8")
+        rc, _ = self.run_cli(objects, ["oss-stacks", "-n", "1", "--confirm"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.bucket.deleted, [])
+
+    def test_overlapping_pin_and_symlink_protection_is_counted_once(self):
+        objects = [
+            FakeObject(go_key("1.24.13")),
+            FakeObject(go_key("1.24.12")),
+            FakeObject(go_key("1.24.11")),
+            FakeObject(go_key("1.24"), "Symlink"),
+        ]
+        self.bucket.symlinks[go_key("1.24")] = go_key("1.24.12")
+        with open(self.retention_list, "w") as f:
+            f.write("go==1.24.12\n")
+        rc, out = self.run_cli(objects, ["oss-stacks", "-n", "1", "--confirm"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.bucket.deleted, [go_key("1.24.11")])
+        self.assertIn("1 protected object(s)", out)
+        self.assertIn("keeping 2 of 3", out)
+
+    def test_symlink_only_noop_message_does_not_blame_the_retention_list(self):
+        objects = [
+            FakeObject(go_key("1.24.13")),
+            FakeObject(go_key("1.24.12")),
+            FakeObject(go_key("1.24"), "Symlink"),
+        ]
+        self.bucket.symlinks[go_key("1.24")] = go_key("1.24.12")
+        rc, out = self.run_cli(objects, ["oss-stacks", "-n", "1", "--confirm"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.bucket.deleted, [])
+        self.assertIn("all versions beyond retention are protected.", out)
+        self.assertNotIn("protected by the retention list", out)
+
+
 class RetentionListCliTest(unittest.TestCase):
     def setUp(self):
         self.objects = [
             FakeObject(go_key("1.24.5")),
             FakeObject(go_key("1.24.4")),
-            FakeObject(go_key("1.23.0")),
-            FakeObject(go_key("1.22.0")),
+            FakeObject(go_key("1.24.3")),
+            FakeObject(go_key("1.24.2")),
             FakeObject(go_key("1.24"), "Symlink"),
             FakeObject(nginx_key("1.31.9")),
             FakeObject(nginx_key("1.31.8")),
-            FakeObject(nginx_key("1.30.0")),
+            FakeObject(nginx_key("1.31.7")),
         ]
         self.bucket = FakeBucket()
         self._tmp = tempfile.TemporaryDirectory()
@@ -390,35 +520,35 @@ class RetentionListCliTest(unittest.TestCase):
         self.write_retention_list("go\n")
         rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
         self.assertEqual(rc, 0)
-        self.assertEqual(self.bucket.deleted, [nginx_key("1.30.0")])
+        self.assertEqual(self.bucket.deleted, [nginx_key("1.31.7")])
         self.assertIn("1 stack rule(s)", out)
 
     def test_exact_pin_is_an_extra_veto_outside_retention(self):
-        self.write_retention_list("go==1.23.0\n")
+        self.write_retention_list("go==1.24.3\n")
         rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(
             self.bucket.deleted,
-            [go_key("1.22.0"), nginx_key("1.30.0")],
+            [go_key("1.24.2"), nginx_key("1.31.7")],
         )
         self.assertIn("1 protected object(s)", out)
         self.assertIn("2 object(s) scheduled for deletion", out)
         self.assertIn("keeping 3 of 4", out)
-        self.assertIn("retention list protecting 1.23.0", out)
-        self.assertNotIn("deleting 1.22.0, 1.23.0", out)
+        self.assertIn("retention list protecting 1.24.3", out)
+        self.assertNotIn("deleting 1.24.2, 1.24.3", out)
 
     def test_all_outdated_versions_protected_still_reports_the_protection(self):
         self.objects = [
             FakeObject(go_key("1.24.5")),
             FakeObject(go_key("1.24.4")),
-            FakeObject(go_key("1.23.0")),
+            FakeObject(go_key("1.24.3")),
         ]
-        self.write_retention_list("go==1.23.0\n")
+        self.write_retention_list("go==1.24.3\n")
         rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [])
-        self.assertIn("retention list protecting 1.23.0", out)
-        self.assertIn("all versions beyond retention are protected by the retention list", out)
+        self.assertIn("retention list protecting 1.24.3", out)
+        self.assertIn("all versions beyond retention are protected.", out)
         self.assertNotIn("every group is within the retention count", out)
 
     def test_a_pin_does_not_change_the_underlying_retention_ranking(self):
@@ -429,7 +559,7 @@ class RetentionListCliTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(
             self.bucket.deleted,
-            [go_key("1.22.0"), go_key("1.23.0"), nginx_key("1.30.0")],
+            [go_key("1.24.2"), go_key("1.24.3"), nginx_key("1.31.7")],
         )
         self.assertIn("0 protected object(s)", out)
 

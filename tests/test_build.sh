@@ -52,6 +52,10 @@ case " $* " in
     echo "$*" >> "${RECONCILE_TEST_STATE}/successes"
     exit 0
     ;;
+  *"cleaner.py"*)
+    echo "$*" >> "${RECONCILE_TEST_STATE}/cleaners"
+    exit "${RECONCILE_TEST_CLEANER_RC:-0}"
+    ;;
   *"reconcile.py"*)
     echo "$*" >> "${RECONCILE_TEST_STATE}/plans"
     cat "${RECONCILE_TEST_PLAN}"
@@ -110,6 +114,9 @@ run_reconcile() {
     export RECONCILE_TEST_PLAN="${root}/plan"
     export RECONCILE_TEST_FAIL_VERSION="${fail_version}"
     export RECONCILE_DRY_RUN="${dry_run}"
+    export CLEANER_DRY_RUN="${CLEANER_DRY_RUN:-}"
+    export CLEANER_KEEP_COUNT="${CLEANER_KEEP_COUNT:-2}"
+    export RECONCILE_TEST_CLEANER_RC="${RECONCILE_TEST_CLEANER_RC:-0}"
     export PATH="${root}/bin:${PATH}"
     # shellcheck source=/dev/null
     . "${REPO}/build.sh"
@@ -156,6 +163,10 @@ test_reconcile_builds_each_planned_item_and_reuses_the_image() {
     || problems="${problems} commit-sha-not-forwarded"
   [ "$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")" -eq 0 ] \
     || problems="${problems} unexpected-alert"
+  [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
+    || problems="${problems} cleaner-not-called"
+  grep -q -- "oss-stacks -n 2 --arch auto --confirm" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
+    || problems="${problems} cleaner-args-missing"
   if [ -z "${problems}" ]; then
     report "reconcile builds each planned item and reuses the image" 0
     rm -rf "${RESULT_ROOT}"
@@ -180,6 +191,8 @@ test_reconcile_continues_after_a_failure_and_exits_non_zero() {
     || problems="${problems} alert-badstack-missing"
   [ "$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")" -eq 1 ] \
     || problems="${problems} successes=$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")"
+  [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 0 ] \
+    || problems="${problems} cleaner-ran-after-failure"
   if [ -z "${problems}" ]; then
     report "reconcile continues after a failure and exits non-zero" 0
     rm -rf "${RESULT_ROOT}"
@@ -217,6 +230,8 @@ test_reconcile_with_empty_plan_builds_nothing() {
   [ "${RESULT_UPLOADS}" -eq 0 ] || problems="${problems} uploads=${RESULT_UPLOADS}"
   [ "${RESULT_IMAGE_BUILDS}" -eq 1 ] || problems="${problems} image_builds=${RESULT_IMAGE_BUILDS}"
   grep -q "nothing to build" "${RESULT_ROOT}/out.log" || problems="${problems} message-missing"
+  [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
+    || problems="${problems} empty-plan-cleaner-not-called"
   if [ -z "${problems}" ]; then
     report "reconcile with empty plan builds nothing" 0
     rm -rf "${RESULT_ROOT}"
@@ -238,6 +253,10 @@ test_reconcile_dry_run_prints_the_plan_without_building() {
   grep -q "nginx@1.31.8" "${RESULT_ROOT}/out.log" || problems="${problems} plan-items-missing"
   grep -q "rustfs@1.0.4" "${RESULT_ROOT}/out.log" || problems="${problems} plan-items-missing"
   grep -q "reconcile: building" "${RESULT_ROOT}/out.log" && problems="${problems} unexpected-build-attempt"
+  [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
+    || problems="${problems} dry-run-cleaner-not-called"
+  grep -q -- "oss-stacks -n 2 --arch auto --dry-run" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
+    || problems="${problems} cleaner-dry-run-args-missing"
   if [ -z "${problems}" ]; then
     report "reconcile dry run prints the plan without building" 0
     rm -rf "${RESULT_ROOT}"
@@ -264,6 +283,24 @@ test_reconcile_forwards_planner_arguments() {
   fi
 }
 
+test_reconcile_cleaner_failure_fails_the_run() {
+  local out problems=""
+  out="$(RECONCILE_TEST_CLEANER_RC=1 run_reconcile "$(mktemp -d)" $'nginx@1.31.8\n' '' '')"
+  parse_result "${out}"
+  [ "${RESULT_RC}" -ne 0 ] || problems="${problems} exit=0"
+  [ "${RESULT_BUILDS}" = "nginx@1.31.8" ] || problems="${problems} builds=[${RESULT_BUILDS}]"
+  [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
+    || problems="${problems} cleaner-not-called"
+  grep -q "cleanup failed" "${RESULT_ROOT}/out.log" || problems="${problems} cleanup-error-missing"
+  if [ -z "${problems}" ]; then
+    report "reconcile cleaner failure fails the run" 0
+    rm -rf "${RESULT_ROOT}"
+  else
+    show_log_on_failure "${problems}" || true
+    report "reconcile cleaner failure fails the run" 1
+  fi
+}
+
 main() {
   test_reconcile_builds_each_planned_item_and_reuses_the_image
   test_reconcile_continues_after_a_failure_and_exits_non_zero
@@ -271,6 +308,7 @@ main() {
   test_reconcile_dry_run_prints_the_plan_without_building
   test_reconcile_forwards_planner_arguments
   test_reconcile_without_github_token_skips_reporting
+  test_reconcile_cleaner_failure_fails_the_run
 
   echo
   echo "${passed} passed, ${failed} failed"

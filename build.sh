@@ -97,6 +97,32 @@ function reconcile-report() {
 }
 
 
+function reconcile-clean() {
+  # Clean old OSS objects after a successful reconcile run. Each matrix
+  # leg removes only its own arch, so amd64/arm64 never overlap. Dry-run
+  # mode is always non-destructive; the cron configuration opts into
+  # real deletion with CLEANER_DRY_RUN=0.
+  local clean_args=(-n "${CLEANER_KEEP_COUNT:-2}" --arch auto)
+  if [ "${RECONCILE_DRY_RUN:-}" = "1" ] || [ "${CLEANER_DRY_RUN:-}" = "1" ]; then
+    clean_args+=(--dry-run)
+  else
+    clean_args+=(--confirm)
+  fi
+  echo "reconcile: cleaning old OSS objects (keep=${CLEANER_KEEP_COUNT:-2} per series)"
+  if ! podman run --rm \
+    --env OSS_ENDPOINT="${OSS_ENDPOINT:-}" \
+    --env OSS_ACCESS_KEY_ID="${OSS_ACCESS_KEY_ID:-}" \
+    --env OSS_ACCESS_KEY_SECRET="${OSS_ACCESS_KEY_SECRET:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/cleaner.py oss-stacks "${clean_args[@]}"; then
+    echo "reconcile: cleanup failed" >&2
+    return 1
+  fi
+}
+
+
 function reconcile {
   create-buildpack-dep
   # Plan inside the buildpack image so /etc/os-release matches the build
@@ -115,14 +141,14 @@ function reconcile {
     python3 scripts/reconcile.py plan "$@")
   if [ -z "${plan}" ]; then
     echo "reconcile: nothing to build"
-    return 0
   fi
   if [ "${RECONCILE_DRY_RUN:-}" = "1" ]; then
     # Observation mode: print the plan the nightly cron would build so it
     # can be reviewed in the pipeline logs before enabling real builds.
     echo "reconcile: dry run, $(printf '%s\n' "${plan}" | grep -c .) item(s) to build:"
     printf '%s\n' "${plan}"
-    return 0
+    reconcile-clean
+    return $?
   fi
   local ok=0 failed=0
   while read -r item; do
@@ -140,7 +166,11 @@ function reconcile {
     fi
   done <<< "${plan}"
   echo "reconcile: done, ok=${ok} failed=${failed}"
-  [ "${failed}" -eq 0 ]
+  if [ "${failed}" -ne 0 ]; then
+    echo "reconcile: skipping OSS cleanup because builds failed" >&2
+    return 1
+  fi
+  reconcile-clean
 }
 
 

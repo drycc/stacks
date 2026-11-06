@@ -2,12 +2,13 @@
 
 build_plan reconciles upstream release candidates against the OSS objects
 that actually exist for the current arch and flavour, and returns the
-stack@version items to build, newest first. The planner rolls forward:
-only candidates newer than the newest version already stored for the
-current stack/arch/flavour are eligible, and only the newest N of those
-are built. Older holes are never backfilled, so cleaner victims cannot
-reappear on a later plan. Missing versions inside the effective window
-are still built, subject to the per-run caps.
+stack@version items to build, newest first. The planner rolls forward
+within each version series: only candidates newer than the newest object
+in that series for the current stack/arch/flavour are eligible, and only
+the newest N eligible candidates in each series are built. Older holes
+are never backfilled, so cleaner victims cannot reappear on a later plan.
+Missing versions inside an effective window are still built, subject to
+the per-run caps.
 
 Run: .venv/bin/python -m unittest discover -s tests -p 'test_reconcile.py' -v
 """
@@ -167,8 +168,8 @@ class BuildPlanTest(unittest.TestCase):
         )
         chosen, deferred, dropped = self.plan(bucket, discover)
         self.assertEqual([c["version"] for c in chosen], ["1.31.9"])
-        self.assertEqual(deferred, 2)
-        self.assertEqual(dropped, 0)
+        self.assertEqual(deferred, 1)
+        self.assertEqual(dropped, 1)
 
     def test_global_order_newest_first_with_undated_last(self):
         bucket = FakeBucket()
@@ -215,23 +216,23 @@ class BuildPlanTest(unittest.TestCase):
             ]}
         )
         chosen, deferred, dropped = self.plan(bucket, discover, max_per_stack=10)
-        self.assertEqual([c["version"] for c in chosen], ["1.31.9", "1.31.8", "1.31.7"])
+        self.assertEqual([c["version"] for c in chosen], ["1.31.9", "1.31.8"])
         self.assertEqual(deferred, 0)
-        self.assertEqual(dropped, 2)
+        self.assertEqual(dropped, 3)
 
     def test_retention_uses_semantic_not_lexicographic_order(self):
-        # lexicographic order would rank "1.9.0" above "1.10.0" and drop
-        # the newest minor line from the retention window instead of
-        # the old 1.7.0; the planner and the cleaner must rank identically
+        # lexicographic order would rank "1.31.9" above "1.31.10" and drop
+        # the newest patch from the retention window instead of the old
+        # 1.31.7; the planner and the cleaner must rank identically
         bucket = FakeBucket()
         discover = fake_discover(
             {"nginx": [
                 candidate("nginx", v, datetime(2026, 11, d, tzinfo=timezone.utc))
-                for v, d in (("1.10.0", 4), ("1.9.0", 3), ("1.8.0", 2), ("1.7.0", 1))
+                for v, d in (("1.31.10", 4), ("1.31.9", 3), ("1.31.8", 2), ("1.31.7", 1))
             ]}
         )
         chosen, deferred, dropped = self.plan(bucket, discover, max_per_stack=10, retention=3)
-        self.assertEqual([c["version"] for c in chosen], ["1.10.0", "1.9.0", "1.8.0"])
+        self.assertEqual([c["version"] for c in chosen], ["1.31.10", "1.31.9", "1.31.8"])
         self.assertEqual(deferred, 0)
         self.assertEqual(dropped, 1)
 
@@ -267,6 +268,38 @@ class BuildPlanTest(unittest.TestCase):
         self.assertEqual([c["version"] for c in chosen], ["1.0.6"])
         self.assertEqual(deferred, 0)
         self.assertEqual(dropped, 1)
+
+    def test_new_releases_in_older_series_are_not_blocked_by_a_newer_series(self):
+        # mysql maintains both tracks: 7.18.2 must be compared with the
+        # 7.18 series (empty here), not with the existing 8.0.0 object.
+        bucket = FakeBucket([key("mysql", "8.0.0")])
+        discover = fake_discover(
+            {"mysql": [
+                candidate("mysql", "8.0.1", datetime(2026, 11, 6, tzinfo=timezone.utc)),
+                candidate("mysql", "7.18.2", datetime(2026, 11, 6, tzinfo=timezone.utc)),
+            ]}
+        )
+        chosen, _, _ = self.plan(bucket, discover, max_per_stack=10)
+        self.assertEqual(
+            {candidate["version"] for candidate in chosen},
+            {"7.18.2", "8.0.1"},
+        )
+
+    def test_roll_forward_boundary_is_per_series(self):
+        bucket = FakeBucket([key("mysql", "8.0.1"), key("mysql", "7.18.1")])
+        discover = fake_discover(
+            {"mysql": [
+                candidate("mysql", "8.0.2", datetime(2026, 11, 6, tzinfo=timezone.utc)),
+                candidate("mysql", "8.0.0", datetime(2026, 11, 5, tzinfo=timezone.utc)),
+                candidate("mysql", "7.18.2", datetime(2026, 11, 6, tzinfo=timezone.utc)),
+                candidate("mysql", "7.18.0", datetime(2026, 11, 5, tzinfo=timezone.utc)),
+            ]}
+        )
+        chosen, _, _ = self.plan(bucket, discover, max_per_stack=10)
+        self.assertEqual(
+            {candidate["version"] for candidate in chosen},
+            {"7.18.2", "8.0.2"},
+        )
 
     def test_oss_error_propagates(self):
         with self.assertRaises(RuntimeError):
@@ -414,14 +447,14 @@ class CliTest(unittest.TestCase):
         checker.discover_candidates = fake_discover(
             {"nginx": [
                 candidate("nginx", v, datetime(2026, 11, d, tzinfo=timezone.utc))
-                for v, d in (("1.10.0", 4), ("1.9.0", 3), ("1.8.0", 2), ("1.7.0", 1))
+                for v, d in (("1.31.10", 4), ("1.31.9", 3), ("1.31.8", 2), ("1.31.7", 1))
             ]}
         )
         rc, stdout, stderr = self.run_plan(
             ["plan", "--arch", "amd64", "--flavour", "debian-13", "--retention", "3"]
         )
         self.assertEqual(rc, 0)
-        self.assertEqual(stdout, "nginx@1.10.0\n")
+        self.assertEqual(stdout, "nginx@1.31.10\n")
         self.assertIn("1 to build", stderr)
         self.assertIn("2 deferred", stderr)
         self.assertIn("1 outside retention", stderr)

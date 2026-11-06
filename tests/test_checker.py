@@ -259,6 +259,28 @@ class JqTagPatternTest(unittest.TestCase):
                 self.assertIsNone(re.fullmatch(self.pattern, tag))
 
 
+class VersionSeriesTest(unittest.TestCase):
+    """The retention series drops only the final dot-separated component,
+    so independently maintained tracks each get their own newest-N window."""
+
+    def test_drops_the_last_component(self):
+        cases = {
+            "13.4": "13",
+            "8.0.1": "8.0",
+            "7.18.2": "7.18",
+            "4.52": "4",
+            "24.3.4.147": "24.3.4",
+            "2023.07.18.21.05.38": "2023.07.18.21.05",
+        }
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(checker.version_series(value), expected)
+
+    def test_a_version_without_a_dot_is_its_own_series(self):
+        self.assertEqual(checker.version_series("17"), "17")
+        self.assertEqual(checker.version_series("23_2_5"), "23_2_5")
+
+
 class RetentionKeepTest(unittest.TestCase):
     """retention_keep provides the shared semantic ordering: the nightly
     planner applies it to candidates newer than the current OSS boundary,
@@ -293,6 +315,7 @@ class RetentionKeepTest(unittest.TestCase):
         # the cleaner's required -n value; it must stay a plain int so
         # both tools share one retention rule without extra configuration.
         self.assertIsInstance(checker.DEFAULT_RETENTION, int)
+        self.assertEqual(checker.DEFAULT_RETENTION, 2)
         versions = ["1.0.%d" % i for i in range(8)]
         kept = checker.retention_keep(versions)
         self.assertEqual(len(kept), checker.DEFAULT_RETENTION)

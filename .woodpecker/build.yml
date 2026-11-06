@@ -26,6 +26,8 @@ steps:
     GITHUB_TOKEN:
       from_secret: github_token
     RECONCILE_DRY_RUN: "0"
+    CLEANER_DRY_RUN: "0"
+    CLEANER_KEEP_COUNT: "2"
   when:
     event:
     - cron

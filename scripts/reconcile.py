@@ -7,16 +7,14 @@ and prints one stack@version item per line to stdout. Statistics go to
 stderr. An upstream or OSS failure aborts the run instead of producing a
 plan.
 
-Only candidates newer than the newest version already stored for the
-current stack/arch/flavour are eligible. The newest N of those eligible
-candidates form the planning window (checker.retention_keep). Older
-holes are never backfilled - even when they are among the newest N
-upstream releases - because old binaries are not used by Docker builds.
-This roll-forward rule also means cleaner.py can delete older OSS
-objects without scheduling a rebuild, including when OSS contains
-versions upstream discovery did not return or the tools use different
-N values. Missing versions inside the effective window are still built,
-subject to the per-run caps.
+Only candidates newer than the newest version already stored in the SAME
+series for the current stack/arch/flavour are eligible. A series is the
+version with its final dot-separated component removed (13.4 -> 13,
+8.0.1 -> 8.0). The newest N eligible candidates in each series form the
+planning windows (checker.retention_keep). Older holes are never
+backfilled, while a new release in an older maintained series can still
+be built alongside a newer series. Missing versions inside an effective
+window are still built, subject to the per-run caps.
 
 The alert subcommand tracks a failed build as a deduplicated GitHub issue
 (creating one only while none is open). The success subcommand records a
@@ -99,16 +97,16 @@ def list_existing_keys(bucket, prefix):
         marker = result.next_marker
 
 
-def _newest_existing_version(existing, stack, arch, flavour):
-    """The newest parseable version already stored for this exact
-    stack/arch/flavour, or None when there is none.
+def _newest_existing_versions(existing, stack, arch, flavour):
+    """Map each retention series to its newest parseable OSS version for
+    this exact stack/arch/flavour.
 
     Existing-only versions matter: upstream discovery is a limited tag
     page, so the newest OSS object may not appear in the candidates.
     Unparseable versions are ignored here (and retained by the cleaner),
     since they cannot establish a semantic ordering boundary.
     """
-    newest = None
+    newest = {}
     for object_key in existing:
         parsed = checker.parse_object_key(object_key)
         if parsed is None:
@@ -120,8 +118,9 @@ def _newest_existing_version(existing, stack, arch, flavour):
             parsed_version = parse(version)
         except InvalidVersion:
             continue
-        if newest is None or parsed_version > newest:
-            newest = parsed_version
+        series = checker.version_series(version)
+        if series not in newest or parsed_version > newest[series]:
+            newest[series] = parsed_version
     return newest
 
 
@@ -135,13 +134,14 @@ def build_plan(arch, flavour, stacks=None, discover=None, bucket=None,
     later runs; dropped counts missing versions outside the effective
     planning window.
 
-    The planner rolls forward: a candidate is eligible only when it is
-    newer than the newest version already stored for this exact
-    stack/arch/flavour. The newest N of those eligible candidates form
-    the retention window (checker.retention_keep). Older holes are never
-    backfilled, so versions deleted by the cleaner cannot be rebuilt -
-    even when OSS contains versions upstream discovery did not return,
-    or when the cleaner uses a different N.
+    The planner rolls forward within each version series: a candidate is
+    eligible only when it is newer than the newest version already stored
+    in that series for this exact stack/arch/flavour. A series with no
+    existing object is eligible too. The newest N eligible candidates in
+    each series form the retention windows (checker.retention_keep).
+    Older holes are never backfilled, so versions deleted by the cleaner
+    cannot be rebuilt - even when OSS contains versions upstream
+    discovery did not return, or when the cleaner uses a different N.
     """
     if discover is None:
         discover = checker.discover_candidates
@@ -157,21 +157,25 @@ def build_plan(arch, flavour, stacks=None, discover=None, bucket=None,
         if not candidates:
             continue
         existing = list_existing_keys(bucket, "stacks/%s/%s-" % (stack, stack))
-        newest_existing = _newest_existing_version(existing, stack, arch, flavour)
-        eligible = []
+        newest_existing = _newest_existing_versions(existing, stack, arch, flavour)
+        eligible_by_series = {}
         for candidate in candidates:
-            if newest_existing is None:
-                eligible.append(candidate)
+            series = checker.version_series(candidate["version"])
+            boundary = newest_existing.get(series)
+            if boundary is None:
+                eligible_by_series.setdefault(series, []).append(candidate)
                 continue
             try:
-                if parse(candidate["version"]) > newest_existing:
-                    eligible.append(candidate)
+                if parse(candidate["version"]) > boundary:
+                    eligible_by_series.setdefault(series, []).append(candidate)
             except InvalidVersion:
                 # retention_keep applies the same conservative rule:
                 # unknown-age versions are not discarded by a guess.
-                eligible.append(candidate)
-        kept = set(checker.retention_keep(
-            [candidate["version"] for candidate in eligible], retention))
+                eligible_by_series.setdefault(series, []).append(candidate)
+        kept = set()
+        for eligible in eligible_by_series.values():
+            kept.update(checker.retention_keep(
+                [candidate["version"] for candidate in eligible], retention))
         missing = []
         for candidate in candidates:
             if object_key(stack, candidate["version"], arch, flavour) in existing:

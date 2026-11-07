@@ -72,7 +72,7 @@ function source-stack-path() {
 
 function build-stack() {
   generate-stack-template
-  build || exit 1
+  build
   validate-stack-data || exit 1
   generate-stack-dependencies
   generate-stack-package "$1"

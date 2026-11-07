@@ -15,6 +15,7 @@ Run: .venv/bin/python -m unittest discover -s tests -p 'test_reconcile.py' -v
 
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -463,6 +464,31 @@ class CliTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             self.run_plan(["plan", "--retention", "0"])
         self.assertEqual(ctx.exception.code, 2)
+
+    def test_reporting_commands_start_without_oss_credentials(self):
+        script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "reconcile.py"
+        )
+        env = os.environ.copy()
+        for name in (
+            "OSS_ENDPOINT", "OSS_ACCESS_KEY_ID", "OSS_ACCESS_KEY_SECRET", "GITHUB_TOKEN"
+        ):
+            env.pop(name, None)
+        commands = (
+            ["alert", "--stack", "nginx", "--version", "1.31.8"],
+            ["success", "--stack", "nginx", "--version", "1.31.8", "--sha", "a" * 40],
+        )
+        for command in commands:
+            with self.subTest(command=command[0]):
+                result = subprocess.run(
+                    [sys.executable, script, *command],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("GITHUB_TOKEN not set, skipping", result.stderr)
 
     def test_cli_alert_forwards_arguments(self):
         with mock.patch("reconcile.alert_failure", return_value=42) as alert:

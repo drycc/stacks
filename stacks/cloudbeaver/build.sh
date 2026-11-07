@@ -8,26 +8,38 @@ function build() {
   # ref : https://github.com/dbeaver/cloudbeaver/wiki/Build-and-deploy
   cd /opt/drycc/
   . init-stack
-  JAVA_VERSION=17.0.9
-  NODE_VERSION=16.20.1
-  install-packages gnupg gnupg2 git maven
-  mvn --version 
-  curl -sL https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add -
-  echo "deb https://dl.yarnpkg.com/debian/ stable main" |  tee /etc/apt/sources.list.d/yarn.list
-  curl -sL https://deb.nodesource.com/setup_14.x |   bash -
-  install-packages yarn
-  yarn --version
-  install-stack node ${NODE_VERSION}
-  export PATH=${PATH}:/opt/drycc/node/bin
-  git clone https://github.com/dbeaver/dbeaver.git 
-  cd dbeaver 
-  git checkout -b release_${STACK_VERSION} --track origin/release_${STACK_VERSION}
-  cd ..
-  git clone https://github.com/dbeaver/cloudbeaver.git 
-  cd cloudbeaver 
-  git checkout -b release_${STACK_VERSION} --track origin/release_${STACK_VERSION}
+  NODE_VERSION=24.13.1
+  YARN_VERSION=4.14.1
+  install-packages git maven xz-utils
+  mvn --version
 
-  cd deploy && ./build.sh && cp -r cloudbeaver/* ${DATA_DIR}
+  # Match the upstream frontend-build workflow for this release. Corepack
+  # activates the Yarn 4 release declared by webapp/package.json.
+  case "${OS_ARCH}" in
+    amd64) NODE_ARCH=x64 ;;
+    arm64) NODE_ARCH=arm64 ;;
+    *) echo "error: unsupported architecture: ${OS_ARCH}" >&2; exit 1 ;;
+  esac
+  curl -fsSL -o node.tar.xz \
+    "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
+  mkdir -p .build-node
+  tar -xJf node.tar.xz -C .build-node --strip-components=1
+  export PATH="$(pwd)/.build-node/bin:${PATH}"
+  corepack enable
+  corepack prepare "yarn@${YARN_VERSION}" --activate
+  yarn --version
+  rm -f node.tar.xz
+
+  # Tags name the exact requested release; upstream branch names use a
+  # different separator scheme and a failed checkout leaves the build on devel.
+  git clone --depth 1 --branch "${STACK_VERSION}" https://github.com/dbeaver/dbeaver-common.git
+  git clone --depth 1 --branch "${STACK_VERSION}" https://github.com/dbeaver/dbeaver.git
+  git clone --depth 1 --branch "${STACK_VERSION}" https://github.com/dbeaver/cloudbeaver.git
+  cd cloudbeaver
+
+  cd deploy
+  ./build.sh
+  cp -r cloudbeaver/* ${DATA_DIR}
   cat << EOF >> "${PROFILE_DIR}"/cloudbeaver.sh
 export CLOUDBEAVER_HOME="/opt/drycc/cloudbeaver"
 EOF

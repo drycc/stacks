@@ -24,6 +24,7 @@ function build() {
   ## install packages 
   install-packages \
     libaio-dev \
+    libudev-dev \
     libsasl2-modules-gssapi-mit \
     libkrb5-dev \
     libsasl2-dev \

@@ -85,10 +85,9 @@ test_scaffold_only_payload_is_rejected() {
   report "scaffold-only payload is rejected" "${rc}"
 }
 
-# A build failure masked by a successful trailing rm -rf (the tikv/grafana
-# pattern: set -e is disabled inside build by "build || exit 1", the last
-# command succeeds, build returns 0) must still abort the pipeline.
-test_masked_build_failure_is_rejected() {
+# Even a build function that returns success must be rejected when it only
+# creates scaffolding; validation runs before dependency scanning/package.
+test_scaffold_only_build_is_rejected() {
   local root rc=0
   root="$(mktemp -d)"
   make_scaffold "${root}"
@@ -98,19 +97,48 @@ test_masked_build_failure_is_rejected() {
     mock_packaging
     build() {
       mkdir -p "${DATA_DIR}/bin"
-      false # download fails, but set -e is off inside build
-      rm -rf "${CASE_ROOT}/nonexistent-download" # cleanup succeeds, build returns 0
     }
     build-stack "${CASE_ROOT}/dist"
   ) || rc=$?
   if [ "${rc}" -eq 0 ]; then
-    echo "  build-stack exited 0 after a masked build failure" >&2
-    report "masked build failure is rejected" 1
+    echo "  build-stack exited 0 with a scaffold-only payload" >&2
+    report "scaffold-only build is rejected" 1
   elif [ -e "${root}/pkg.called" ]; then
     echo "  generate-stack-package ran despite an empty payload" >&2
-    report "masked build failure is rejected" 1
+    report "scaffold-only build is rejected" 1
   else
-    report "masked build failure is rejected" 0
+    report "scaffold-only build is rejected" 0
+  fi
+  rm -rf "${root}"
+}
+
+# A failed command inside build must stop later commands even when the
+# payload is otherwise valid. Running `build || exit 1` disables errexit
+# throughout the function and incorrectly lets packaging continue.
+test_build_failure_skips_remaining_commands() {
+  local root rc
+  root="$(mktemp -d)"
+  make_scaffold "${root}"
+  CASE_ROOT="${root}"
+  (
+    setup_case
+    mock_packaging
+    build() {
+      echo payload > "${DATA_DIR}/bin/teststack"
+      false
+      touch "${CASE_ROOT}/after-failure"
+    }
+    build-stack "${CASE_ROOT}/dist"
+  ) > "${root}/out.log" 2>&1
+  rc=$?
+  if [ "${rc}" -eq 0 ]; then
+    echo "  build-stack exited 0 after a command inside build failed" >&2
+    report "build failure skips remaining commands" 1
+  elif [ -e "${root}/after-failure" ] || [ -e "${root}/pkg.called" ]; then
+    echo "  commands or packaging continued after the build failure" >&2
+    report "build failure skips remaining commands" 1
+  else
+    report "build failure skips remaining commands" 0
   fi
   rm -rf "${root}"
 }
@@ -206,7 +234,8 @@ test_valid_build_still_packages() {
 
 main() {
   test_scaffold_only_payload_is_rejected
-  test_masked_build_failure_is_rejected
+  test_scaffold_only_build_is_rejected
+  test_build_failure_skips_remaining_commands
   test_regular_file_payload_is_accepted
   test_payload_outside_bin_is_accepted
   test_symlink_payload_is_accepted

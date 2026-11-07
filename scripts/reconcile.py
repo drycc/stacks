@@ -40,7 +40,6 @@ import sys
 
 import checker
 import requests
-import storage
 from packaging.version import InvalidVersion, parse
 
 
@@ -146,6 +145,9 @@ def build_plan(arch, flavour, stacks=None, discover=None, bucket=None,
     if discover is None:
         discover = checker.discover_candidates
     if bucket is None:
+        # Only OSS planning needs storage credentials. GitHub alert/success
+        # reporting must also start when those credentials are absent.
+        import storage
         bucket = storage.bucket
     if stacks is None:
         stacks = default_stacks()

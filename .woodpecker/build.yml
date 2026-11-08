@@ -1,3 +1,6 @@
+when:
+- event: cron
+
 matrix:
   platform:
     - linux/amd64
@@ -28,6 +31,3 @@ steps:
     RECONCILE_DRY_RUN: "0"
     CLEANER_DRY_RUN: "0"
     CLEANER_KEEP_COUNT: "2"
-  when:
-    event:
-    - cron

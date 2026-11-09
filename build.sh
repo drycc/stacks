@@ -108,6 +108,21 @@ function reconcile-clean() {
   else
     clean_args+=(--confirm)
   fi
+  local generated_retention="${DIST_DIR}/retention-list.generated.txt"
+  mkdir -p "${DIST_DIR}"
+  echo "reconcile: generating dynamic retention list"
+  if ! podman run --rm \
+    --env GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/retention.py \
+    --repos retention-repo.txt \
+    --static retention-list.txt \
+    --output "${generated_retention}"; then
+    echo "reconcile: retention generation failed" >&2
+    return 1
+  fi
   echo "reconcile: cleaning old OSS objects (keep=${CLEANER_KEEP_COUNT:-2} per series)"
   if ! podman run --rm \
     --env OSS_ENDPOINT="${OSS_ENDPOINT:-}" \
@@ -116,7 +131,8 @@ function reconcile-clean() {
     -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
     -w "${CURRENT_DIR}" \
     "${BUILDPACK_DEP_IMAGE}" \
-    python3 scripts/cleaner.py oss-stacks "${clean_args[@]}"; then
+    python3 scripts/cleaner.py oss-stacks "${clean_args[@]}" \
+    --retention-list "${generated_retention}"; then
     echo "reconcile: cleanup failed" >&2
     return 1
   fi

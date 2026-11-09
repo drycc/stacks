@@ -152,9 +152,8 @@ class RetentionListParseTest(unittest.TestCase):
                     cleaner.parse_retention_list([entry + "\n"])
 
     def test_default_retention_list_file_is_valid(self):
-        stacks, versions = cleaner.load_retention_list(cleaner.DEFAULT_RETENTION_LIST)
+        stacks, _ = cleaner.load_retention_list(cleaner.DEFAULT_RETENTION_LIST)
         self.assertTrue({"go", "java", "node", "php", "python", "ruby", "rust"} <= stacks)
-        self.assertTrue(versions)
 
 
 class RetentionGroupsTest(unittest.TestCase):

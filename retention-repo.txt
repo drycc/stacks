@@ -1,0 +1,23 @@
+# Production repositories whose Dockerfiles consume OSS stacks via install-stack.
+# Audited against all 41 public drycc/drycc-addons repositories on 2026-11-09.
+# drycc/samples is intentionally excluded; test Dockerfiles are also scanned.
+drycc/builder
+drycc/controller
+drycc/database
+drycc/filer
+drycc/fluentbit
+drycc/go-dev
+drycc/grafana
+drycc/imagebuilder
+drycc/pack-images
+drycc/passport
+drycc/python-dev
+drycc/quickwit
+drycc/registry
+drycc/storage
+drycc/valkey
+drycc/victoriametrics
+drycc/website
+drycc-addons/containers
+drycc-addons/helmbroker
+drycc-addons/resources

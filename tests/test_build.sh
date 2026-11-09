@@ -52,6 +52,10 @@ case " $* " in
     echo "$*" >> "${RECONCILE_TEST_STATE}/successes"
     exit 0
     ;;
+  *"retention.py"*)
+    echo "$*" >> "${RECONCILE_TEST_STATE}/retentions"
+    exit "${RECONCILE_TEST_RETENTION_RC:-0}"
+    ;;
   *"cleaner.py"*)
     echo "$*" >> "${RECONCILE_TEST_STATE}/cleaners"
     exit "${RECONCILE_TEST_CLEANER_RC:-0}"
@@ -117,6 +121,7 @@ run_reconcile() {
     export CLEANER_DRY_RUN="${CLEANER_DRY_RUN:-}"
     export CLEANER_KEEP_COUNT="${CLEANER_KEEP_COUNT:-2}"
     export RECONCILE_TEST_CLEANER_RC="${RECONCILE_TEST_CLEANER_RC:-0}"
+    export RECONCILE_TEST_RETENTION_RC="${RECONCILE_TEST_RETENTION_RC:-0}"
     export PATH="${root}/bin:${PATH}"
     # shellcheck source=/dev/null
     . "${REPO}/build.sh"
@@ -167,10 +172,16 @@ test_reconcile_builds_each_planned_item_and_reuses_the_image() {
     || problems="${problems} commit-sha-not-forwarded"
   [ "$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")" -eq 0 ] \
     || problems="${problems} unexpected-alert"
+  [ "$(count_calls "${RESULT_ROOT}/state/retentions" "retention.py")" -eq 1 ] \
+    || problems="${problems} retention-generator-not-called"
+  grep -q -- "--repos retention-repo.txt --static retention-list.txt --output" \
+    "${RESULT_ROOT}/state/retentions" 2> /dev/null || problems="${problems} retention-args-missing"
   [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
     || problems="${problems} cleaner-not-called"
   grep -q -- "oss-stacks -n 2 --arch auto --confirm" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
     || problems="${problems} cleaner-args-missing"
+  grep -q -- "--retention-list .*retention-list.generated.txt" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
+    || problems="${problems} generated-list-not-passed-to-cleaner"
   if [ -z "${problems}" ]; then
     report "reconcile builds each planned item and reuses the image" 0
     rm -rf "${RESULT_ROOT}"
@@ -293,6 +304,28 @@ test_reconcile_forwards_planner_arguments() {
   fi
 }
 
+test_retention_generation_failure_skips_cleaner() {
+  local out problems=""
+  out="$(RECONCILE_TEST_RETENTION_RC=1 run_reconcile "$(mktemp -d)" $'nginx@1.31.8\n' '' '')"
+  parse_result "${out}"
+  [ "${RESULT_RC}" -ne 0 ] || problems="${problems} exit=0"
+  [ "$(count_calls "${RESULT_ROOT}/state/retentions" "retention.py")" -eq 1 ] \
+    || problems="${problems} retention-generator-not-called"
+  [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 0 ] \
+    || problems="${problems} cleaner-ran-after-retention-failure"
+  grep -q "retention generation failed" "${RESULT_ROOT}/out.log" \
+    || problems="${problems} retention-error-missing"
+  grep -q '^reconcile: run failed: 0 build failure(s), cleanup=failed$' "${RESULT_ROOT}/out.log" \
+    || problems="${problems} final-retention-failure-missing"
+  if [ -z "${problems}" ]; then
+    report "retention generation failure skips cleaner" 0
+    rm -rf "${RESULT_ROOT}"
+  else
+    show_log_on_failure "${problems}" || true
+    report "retention generation failure skips cleaner" 1
+  fi
+}
+
 test_reconcile_cleaner_failure_fails_the_run() {
   local out problems=""
   out="$(RECONCILE_TEST_CLEANER_RC=1 run_reconcile "$(mktemp -d)" $'nginx@1.31.8\n' '' '')"
@@ -320,6 +353,7 @@ main() {
   test_reconcile_dry_run_prints_the_plan_without_building
   test_reconcile_forwards_planner_arguments
   test_reconcile_without_github_token_skips_reporting
+  test_retention_generation_failure_skips_cleaner
   test_reconcile_cleaner_failure_fails_the_run
 
   echo

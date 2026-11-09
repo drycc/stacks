@@ -24,6 +24,20 @@ function create-buildpack-dep {
   podman build --pull -f "${CURRENT_DIR}"/Dockerfile --build-arg CODENAME="${CODENAME}" --build-arg DRYCC_REGISTRY="${DRYCC_REGISTRY}" . -t "${BUILDPACK_DEP_IMAGE}"
 }
 
+function test {
+  # Run the complete suite in the same dependency environment used by the
+  # nightly reconcile, cleaner, and retention generator.
+  create-buildpack-dep
+  podman run --rm \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    bash -c '
+      python -m unittest discover -s tests -p "test_*.py" -v &&
+      for test_script in tests/test_*.sh; do bash "$test_script" || exit 1; done
+    '
+}
+
 function build {
   mkdir -p "$DIST_DIR"
   STACK_NAME="${1:?STACK_NAME is required}"

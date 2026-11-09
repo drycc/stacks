@@ -44,6 +44,10 @@ case " $* " in
     echo "image-build" >> "${RECONCILE_TEST_STATE}/buildpack-builds"
     exit 0
     ;;
+  *"python -m unittest discover"*)
+    echo "$*" >> "${RECONCILE_TEST_STATE}/ci-tests"
+    exit 0
+    ;;
   *"reconcile.py alert"*)
     echo "$*" >> "${RECONCILE_TEST_STATE}/alerts"
     exit 0
@@ -346,7 +350,42 @@ test_reconcile_cleaner_failure_fails_the_run() {
   fi
 }
 
+test_ci_test_uses_buildpack_image() {
+  local root rc=0 problems=""
+  root="$(mktemp -d)"
+  mkdir -p "${root}/state"
+  make_fake_podman "${root}"
+  RESULT_ROOT="${root}"
+  (
+    export CODENAME=debian-13
+    export DRYCC_REGISTRY=registry.drycc.cc
+    export RECONCILE_TEST_STATE="${root}/state"
+    export PATH="${root}/bin:${PATH}"
+    bash "${REPO}/build.sh" test
+  ) > "${root}/out.log" 2>&1 || rc=$?
+  [ "${rc}" -eq 0 ] || problems="${problems} exit=${rc}"
+  [ "$(count_calls "${root}/state/buildpack-builds" "image-build")" -eq 1 ] \
+    || problems="${problems} buildpack-image-not-built"
+  [ "$(count_calls "${root}/state/ci-tests" "python -m unittest discover")" -eq 1 ] \
+    || problems="${problems} test-container-not-called"
+  grep -q "buildpack-dep:debian-13" "${root}/state/ci-tests" 2> /dev/null \
+    || problems="${problems} buildpack-image-not-used"
+  grep -q "for test_script in tests/test_\*.sh" "${root}/state/ci-tests" 2> /dev/null \
+    || problems="${problems} shell-tests-missing"
+  if grep -q "pip install" "${root}/state/ci-tests" 2> /dev/null; then
+    problems="${problems} unexpected-pip-install"
+  fi
+  if [ -z "${problems}" ]; then
+    report "build.sh test uses buildpack image for all tests" 0
+    rm -rf "${root}"
+  else
+    show_log_on_failure "${problems}" || true
+    report "build.sh test uses buildpack image for all tests" 1
+  fi
+}
+
 main() {
+  test_ci_test_uses_buildpack_image
   test_reconcile_builds_each_planned_item_and_reuses_the_image
   test_reconcile_failure_still_cleans_reports_lists_and_exits_non_zero
   test_reconcile_with_empty_plan_builds_nothing

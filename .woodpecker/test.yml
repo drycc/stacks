@@ -7,8 +7,9 @@ labels:
 
 steps:
 - name: test
-  image: python:3.13
+  image: bash
   commands:
-  - python -m pip install --no-cache-dir -r requirements.txt
-  - python -m unittest discover -s tests -p 'test_*.py' -v
-  - for test_script in tests/test_*.sh; do bash "$test_script" || exit 1; done
+  - ./build.sh test
+  environment:
+    CODENAME:
+      from_secret: codename

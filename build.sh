@@ -98,8 +98,8 @@ function reconcile-report() {
 
 
 function reconcile-clean() {
-  # Clean old OSS objects after a successful reconcile run. Each matrix
-  # leg removes only its own arch, so amd64/arm64 never overlap. Dry-run
+  # Clean old OSS objects after all planned builds have been attempted.
+  # Each matrix leg removes only its own arch, so amd64/arm64 never overlap. Dry-run
   # mode is always non-destructive; the cron configuration opts into
   # real deletion with CLEANER_DRY_RUN=0.
   local clean_args=(-n "${CLEANER_KEEP_COUNT:-2}" --arch auto)
@@ -151,6 +151,8 @@ function reconcile {
     return $?
   fi
   local ok=0 failed=0
+  local succeeded_items=() failed_items=()
+  local item
   while read -r item; do
     [ -n "${item}" ] || continue
     echo "reconcile: building ${item}"
@@ -158,19 +160,36 @@ function reconcile {
     # inside build/upload (an if-context would disable it).
     if SKIP_CREATE_BUILDPACK_DEP=1 bash "${CURRENT_DIR}/build.sh" all "${item}"; then
       ok=$((ok + 1))
+      succeeded_items+=("${item}")
       reconcile-report success "${item%@*}" "${item#*@}"
     else
       failed=$((failed + 1))
+      failed_items+=("${item}")
       echo "reconcile: failed to build ${item}" >&2
       reconcile-report alert "${item%@*}" "${item#*@}"
     fi
   done <<< "${plan}"
   echo "reconcile: done, ok=${ok} failed=${failed}"
-  if [ "${failed}" -ne 0 ]; then
-    echo "reconcile: skipping OSS cleanup because builds failed" >&2
+  echo "reconcile: succeeded (${ok}):"
+  for item in "${succeeded_items[@]}"; do
+    echo "  ${item}"
+  done
+  echo "reconcile: failed (${failed}):"
+  for item in "${failed_items[@]}"; do
+    echo "  ${item}"
+  done
+
+  # Item failures must not prevent retention cleanup. Preserve their failed
+  # status and report it after cleanup so the pipeline still fails visibly.
+  local cleanup_status=ok
+  if ! reconcile-clean; then
+    cleanup_status=failed
+  fi
+  if [ "${failed}" -ne 0 ] || [ "${cleanup_status}" != "ok" ]; then
+    echo "reconcile: run failed: ${failed} build failure(s), cleanup=${cleanup_status}" >&2
     return 1
   fi
-  reconcile-clean
+  echo "reconcile: run succeeded"
 }
 
 

@@ -5,8 +5,8 @@
 #   - plan inside the buildpack image, build each planned item via
 #     "bash build.sh all stack@version"
 #   - one buildpack-dep image per run, reused for every item
-#   - a failing item must not stop the remaining items, but the run
-#     must exit non-zero
+#   - a failing item must not stop the remaining items or cleanup, but
+#     the run must exit non-zero
 #
 # Run: bash tests/test_build.sh
 
@@ -155,6 +155,10 @@ test_reconcile_builds_each_planned_item_and_reuses_the_image() {
   [ "${RESULT_BUILDS}" = "nginx@1.31.8,rustfs@1.0.4" ] || problems="${problems} builds=[${RESULT_BUILDS}]"
   [ "${RESULT_UPLOADS}" -eq 2 ] || problems="${problems} uploads=${RESULT_UPLOADS}"
   grep -q "ok=2 failed=0" "${RESULT_ROOT}/out.log" || problems="${problems} summary-missing"
+  grep -q '^reconcile: succeeded (2):$' "${RESULT_ROOT}/out.log" || problems="${problems} succeeded-list-missing"
+  grep -q '^  nginx@1.31.8$' "${RESULT_ROOT}/out.log" || problems="${problems} succeeded-nginx-missing"
+  grep -q '^  rustfs@1.0.4$' "${RESULT_ROOT}/out.log" || problems="${problems} succeeded-rustfs-missing"
+  grep -q '^reconcile: failed (0):$' "${RESULT_ROOT}/out.log" || problems="${problems} empty-failed-list-missing"
   [ "$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")" -eq 2 ] \
     || problems="${problems} successes=$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")"
   grep -q -- "--stack nginx --version 1.31.8" "${RESULT_ROOT}/state/successes" 2> /dev/null \
@@ -176,7 +180,7 @@ test_reconcile_builds_each_planned_item_and_reuses_the_image() {
   fi
 }
 
-test_reconcile_continues_after_a_failure_and_exits_non_zero() {
+test_reconcile_failure_still_cleans_reports_lists_and_exits_non_zero() {
   local out problems=""
   out="$(run_reconcile "$(mktemp -d)" $'nginx@1.31.8\nbadstack@9.9.9\n' '9.9.9' '')"
   parse_result "${out}"
@@ -185,20 +189,26 @@ test_reconcile_continues_after_a_failure_and_exits_non_zero() {
   [ "${RESULT_BUILDS}" = "nginx@1.31.8,badstack@9.9.9" ] || problems="${problems} builds=[${RESULT_BUILDS}]"
   [ "${RESULT_UPLOADS}" -eq 1 ] || problems="${problems} uploads=${RESULT_UPLOADS}"
   grep -q "ok=1 failed=1" "${RESULT_ROOT}/out.log" || problems="${problems} summary-missing"
+  grep -q '^reconcile: succeeded (1):$' "${RESULT_ROOT}/out.log" || problems="${problems} succeeded-list-missing"
+  grep -q '^  nginx@1.31.8$' "${RESULT_ROOT}/out.log" || problems="${problems} succeeded-nginx-missing"
+  grep -q '^reconcile: failed (1):$' "${RESULT_ROOT}/out.log" || problems="${problems} failed-list-missing"
+  grep -q '^  badstack@9.9.9$' "${RESULT_ROOT}/out.log" || problems="${problems} failed-badstack-missing"
+  grep -q '^reconcile: run failed: 1 build failure(s), cleanup=ok$' "${RESULT_ROOT}/out.log" \
+    || problems="${problems} final-failure-missing"
   [ "$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")" -eq 1 ] \
     || problems="${problems} alerts=$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")"
   grep -q -- "--stack badstack --version 9.9.9" "${RESULT_ROOT}/state/alerts" 2> /dev/null \
     || problems="${problems} alert-badstack-missing"
   [ "$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")" -eq 1 ] \
     || problems="${problems} successes=$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")"
-  [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 0 ] \
-    || problems="${problems} cleaner-ran-after-failure"
+  [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
+    || problems="${problems} cleaner-not-called-after-failure"
   if [ -z "${problems}" ]; then
-    report "reconcile continues after a failure and exits non-zero" 0
+    report "reconcile failure still cleans, reports lists, and exits non-zero" 0
     rm -rf "${RESULT_ROOT}"
   else
     show_log_on_failure "${problems}" || true
-    report "reconcile continues after a failure and exits non-zero" 1
+    report "reconcile failure still cleans, reports lists, and exits non-zero" 1
   fi
 }
 
@@ -292,6 +302,8 @@ test_reconcile_cleaner_failure_fails_the_run() {
   [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
     || problems="${problems} cleaner-not-called"
   grep -q "cleanup failed" "${RESULT_ROOT}/out.log" || problems="${problems} cleanup-error-missing"
+  grep -q '^reconcile: run failed: 0 build failure(s), cleanup=failed$' "${RESULT_ROOT}/out.log" \
+    || problems="${problems} final-cleanup-failure-missing"
   if [ -z "${problems}" ]; then
     report "reconcile cleaner failure fails the run" 0
     rm -rf "${RESULT_ROOT}"
@@ -303,7 +315,7 @@ test_reconcile_cleaner_failure_fails_the_run() {
 
 main() {
   test_reconcile_builds_each_planned_item_and_reuses_the_image
-  test_reconcile_continues_after_a_failure_and_exits_non_zero
+  test_reconcile_failure_still_cleans_reports_lists_and_exits_non_zero
   test_reconcile_with_empty_plan_builds_nothing
   test_reconcile_dry_run_prints_the_plan_without_building
   test_reconcile_forwards_planner_arguments

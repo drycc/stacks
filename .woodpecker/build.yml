@@ -1,3 +1,6 @@
+when:
+- event: cron
+
 matrix:
   platform:
     - linux/amd64
@@ -8,10 +11,10 @@ labels:
   platform: ${platform}
 
 steps:
-- name: publish-linux
+- name: reconcile-linux
   image: bash
   commands:
-  - ./build.sh all $CI_COMMIT_TAG
+  - ./build.sh reconcile
   environment:
     CODENAME:
       from_secret: codename
@@ -23,6 +26,8 @@ steps:
       from_secret: oss_access_key_secret
     CONTAINER_PULL_SECRETS:
       from_secret: container_pull_secrets
-  when:
-    event:
-    - tag
+    GITHUB_TOKEN:
+      from_secret: github_token
+    RECONCILE_DRY_RUN: "0"
+    CLEANER_DRY_RUN: "0"
+    CLEANER_KEEP_COUNT: "2"

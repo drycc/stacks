@@ -10,7 +10,7 @@ function build() {
   mkdir -p "${BIN_DIR}"
 
   curl -fsSL -o rustfs.zip https://github.com/rustfs/rustfs/releases/download/${STACK_VERSION}/rustfs-linux-$(uname -m)-gnu-v${STACK_VERSION}.zip \
-    && unzip -j rustfs.zip -d "${BIN_DIR}" \
+    && unzip -j rustfs.zip "${STACK_NAME}" -d "${BIN_DIR}" \
     && rm rustfs.zip
 
   chmod +x "${BIN_DIR}"/"${STACK_NAME}"

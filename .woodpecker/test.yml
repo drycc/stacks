@@ -1,0 +1,15 @@
+when:
+- event: push
+
+labels:
+  type: exec
+  platform: linux/amd64
+
+steps:
+- name: test
+  image: bash
+  commands:
+  - ./build.sh test
+  environment:
+    CODENAME:
+      from_secret: codename

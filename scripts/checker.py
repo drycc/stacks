@@ -3,6 +3,14 @@ import re
 import json
 import requests
 from datetime import datetime, timezone
+from packaging.version import InvalidVersion, parse
+
+
+# The shared retention rule: every (stack, version series) keeps the
+# newest N versions. The reconcile planner only builds inside these
+# per-series windows and the OSS cleaner only deletes outside them, so
+# cleanup never schedules a rebuild.
+DEFAULT_RETENTION = 2
 
 
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
@@ -137,8 +145,8 @@ repo_info_table = {
     "jq": {
         "name": "jq",
         "type": "github",
-        "owner": "stedolan",
-        "match": "^jq-[0-9]{1,}\.[0-9]{1,}\.?[0-9]{0}$",
+        "owner": "jqlang",
+        "match": r"^jq-[0-9]+\.[0-9]+(?:\.[0-9]+)?$",
     },
     "kvrocks": {
         "name": "kvrocks",
@@ -452,12 +460,6 @@ repo_info_table = {
         "owner": "victoriametrics",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "fluent-bit-manager": {
-        "name": "fluent-bit-manager",
-        "type": "github",
-        "owner": "drycc-addons",
-        "match": "v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "headscale": {
         "name": "headscale",
         "type": "github",
@@ -473,30 +475,8 @@ repo_info_table = {
 }
 
 
-def create_github_tag(stack, tag_name):
-    sha = requests.get(
-        "https://api.github.com/repos/drycc/stacks/git/trees/main",
-        headers=github_headers,
-    ).json()["sha"]
-    response = requests.post(
-        "https://api.github.com/repos/drycc/stacks/git/tags",
-        data = json.dumps({
-            "tag": tag_name,
-            "object": sha,
-            "message": f"new build for {stack}",
-            "type": "commit",
-        }),
-        headers=github_headers,
-    ).json()
-    params = dict(ref=f"refs/tags/{tag_name}", sha=response['object']['sha'])
-    response = requests.post(
-        'https://api.github.com/repos/drycc/stacks/git/refs',
-        data=json.dumps(params),
-        headers=github_headers,
-    )
-
-
-def create_github_issue(stack, tag_name):
+def normalize_version(tag_name):
+    """Extract the stack version from an upstream tag name."""
     strip_regex = "^[a-zA-Z\-_]{1,}"
     replace_regex = "[a-zA-Z\+\-_]{1,}"
     version = tag_name
@@ -504,21 +484,71 @@ def create_github_issue(stack, tag_name):
         version = re.subn(strip_regex, "", tag_name)[0]
     if re.search(replace_regex, version):
         version = re.subn(replace_regex, ".", version)[0].strip(".")
-    if requests.get(
-        f"https://api.github.com/repos/drycc/stacks/git/ref/tags/{stack}@{version}",
-        headers=github_headers,
-    ).status_code == 404:
-        create_github_tag(stack, f"{stack}@{version}")
-        link = f"https://github.com/search?q=org%3Adrycc+install-stack+{stack}&type=code"
-        requests.post(
-            "https://api.github.com/repos/drycc/stacks/issues",
-            data = json.dumps({
-                "title": f"new build for {stack}@{version}",
-                "body": f"Please judge whether the [referenced item]({link}) needs to be changed.",
-                "labels": ["tag"]
-            }),
-            headers=github_headers,
-        )
+    return version
+
+
+def parse_object_key(key):
+    """stacks/<stack>/<stack>-<version>-linux-<arch>-<flavour>.tar.gz ->
+    (stack, version, arch, flavour), or None when the key does not
+    follow the artifact layout (directory markers, foreign names).
+
+    The version is whatever sits between "<stack>-" and "-linux-" so
+    hyphenated stack names stay intact, and the flavour is the rest of
+    the tail so hyphenated flavours do too. Shared by the planner and
+    the cleaner so both interpret OSS objects identically.
+    """
+    if not key.startswith("stacks/") or not key.endswith(".tar.gz"):
+        return None
+    parts = key.split("/")
+    if len(parts) != 3:
+        return None
+    stack, basename = parts[1], parts[2]
+    if not basename.startswith(stack + "-"):
+        return None
+    body = basename[len(stack) + 1:]
+    version, marker, tail = body.partition("-linux-")
+    if not marker:
+        return None
+    arch, sep, flavour = tail.removesuffix(".tar.gz").partition("-")
+    if not sep or arch not in ("amd64", "arm64") or not flavour:
+        return None
+    return stack, version, arch, flavour
+
+
+def version_series(value):
+    """Return the retention series: drop only the final dot-separated
+    component. For example 13.4 -> 13, 8.0.1 -> 8.0 and 4.52 -> 4.
+    A value without a dot is its own series.
+    """
+    head, separator, _ = value.rpartition(".")
+    return head if separator else value
+
+
+def retention_keep(versions, count=DEFAULT_RETENTION):
+    """Return the versions kept by the shared retention rule: the newest
+    `count` versions by semantic order (packaging.version.parse), newest
+    first.
+
+    The reconcile planner and the OSS cleaner both use this semantic
+    ordering helper within each version series. The planner rolls forward
+    from the newest object in the same series, so a version pruned by the
+    cleaner is never selected for rebuilding. Semantic order (not
+    lexicographic) matters: "1.10.0" is newer than "1.9.0".
+
+    Versions that cannot be parsed are always kept: their age is
+    unknown, so dropping them would be a guess.
+    """
+    if count < 1:
+        raise ValueError("retention count must be at least 1")
+    ranked = []
+    unknown = []
+    for value in versions:
+        try:
+            ranked.append((parse(value), value))
+        except InvalidVersion:
+            unknown.append(value)
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    return [value for _, value in ranked[:count]] + unknown
 
 
 github_tags_graphql = """
@@ -544,9 +574,23 @@ query {
 }
 """
 
-def check_github_version(stack):
-    info = repo_info_table[stack]
-    response = requests.post(
+def _tag_date(tag, info, session):
+    target = tag["node"]["target"]
+    if "tagger" in target:
+        raw = target["tagger"]["date"]
+    else:
+        response = session.get(
+            "https://api.github.com/repos/{}/{}/commits/{}".format(
+                info["owner"], info["name"], target["oid"]
+            ),
+            headers=github_headers,
+        )
+        raw = response.json()["commit"]["author"]["date"]
+    return datetime.strptime(raw[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+
+
+def _github_candidates(stack, info, session):
+    response = session.post(
         "https://api.github.com/graphql",
         data=json.dumps({
             "query": github_tags_graphql.replace(
@@ -554,51 +598,52 @@ def check_github_version(stack):
         }),
         headers=github_headers,
     )
+    candidates = []
+    seen = set()
     for tag in response.json()["data"]["repository"]["refs"]["edges"]:
-        if "tagger" in tag["node"]["target"]:
-            date = datetime.strptime(
-                tag["node"]["target"]["tagger"]["date"][:19], "%Y-%m-%dT%H:%M:%S"
-            ).astimezone(timezone.utc)
-        else:
-            date = datetime.strptime(
-                requests.get(
-                    "https://api.github.com/repos/{}/{}/commits/{}".format(
-                        info["owner"], info["name"], tag["node"]["target"]["oid"]
-                    ), headers=github_headers
-                ).json()["commit"]["author"]["date"][:19],
-                "%Y-%m-%dT%H:%M:%S"
-            ).astimezone(timezone.utc)
-        if re.match(info["match"], tag["node"]["name"]):
-            if (datetime.now(timezone.utc) - date).days <= 7:
-                create_github_issue(stack, tag["node"]["name"])
-            else:
-                break
+        name = tag["node"]["name"]
+        if not re.match(info["match"], name):
+            continue
+        version = normalize_version(name)
+        if version in seen:
+            continue
+        seen.add(version)
+        candidates.append({
+            "stack": stack,
+            "version": version,
+            "upstream": name,
+            "date": _tag_date(tag, info, session),
+        })
+    return candidates
 
-def check_url_version(stack):
-    info = repo_info_table[stack]
-    html = requests.get(info["url"]).text
+
+def _url_candidates(stack, info, session):
+    html = session.get(info["url"]).text
     versions = set()
     for url in set(re.findall(info["search"], html)):
         match = re.search(info["version"], url)
         if match:
             versions.add(match.group())
-    for version in versions:
-        create_github_issue(stack, version)
+    return [
+        {"stack": stack, "version": version, "upstream": version, "date": None}
+        for version in sorted(versions, reverse=True)
+    ]
 
 
-def main():
-    for stack in os.listdir(os.path.join(os.path.dirname(__file__), "..", "stacks")):
-        if stack not in repo_info_table:
-            raise NotImplementedError(f"{stack} not in repo_info_table")
-        else:
-            repo_type = repo_info_table[stack]["type"]
-            if repo_type == "github":
-                check_github_version(stack)
-            elif repo_type == 'url':
-                check_url_version(stack)
-            else:
-                raise NotImplementedError(f"{repo_type} NotImplemented")
+def discover_candidates(stack, session=None):
+    """Discover upstream release candidates for a stack (read-only).
 
+    Returns a list of candidates, newest first for github stacks, each a
+    dict with "stack", "version" (normalized), "upstream" (raw tag name)
+    and "date" (aware datetime, or None for url stacks). Never creates
+    tags or issues in drycc/stacks.
+    """
+    info = repo_info_table[stack]
+    if session is None:
+        session = requests
+    if info["type"] == "github":
+        return _github_candidates(stack, info, session)
+    if info["type"] == "url":
+        return _url_candidates(stack, info, session)
+    raise NotImplementedError(f"{info['type']} NotImplemented")
 
-if __name__ == "__main__":
-   main()

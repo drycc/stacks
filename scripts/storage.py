@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import tarfile
 import oss2
 from packaging.version import parse
 
@@ -25,7 +26,48 @@ symlink_table = {
 }
 
 
+def _find_payload(tar):
+    """Return the name of the first real payload member, or None.
+
+    Works with both random-access and streaming tarfile objects. A real
+    payload is a regular file, symlink or hard link under data/ outside
+    data/profile.d/.
+    """
+    for member in tar:
+        name = member.name
+        if name.startswith("./"):
+            name = name[2:]
+        if not name.startswith("data/"):
+            continue
+        rest = name[len("data/"):].rstrip("/")
+        if not rest or rest == "profile.d" or rest.startswith("profile.d/"):
+            continue
+        if member.isfile() or member.issym() or member.islnk():
+            return member.name
+    return None
+
+
+def validate_package(filepath):
+    """Raise ValueError unless the tar.gz archive holds a real payload.
+
+    A real payload is at least one regular file, symlink or hard link under
+    data/ outside data/profile.d/. Directory entries and meta/ scaffolding do
+    not count, so a failed build can no longer be uploaded as an empty
+    package.
+    """
+    try:
+        with tarfile.open(filepath, "r:gz") as tar:
+            payload = _find_payload(tar)
+    except (tarfile.TarError, EOFError, OSError) as exc:
+        raise ValueError("invalid stack package %s: %s" % (filepath, exc)) from exc
+    if payload is None:
+        raise ValueError(
+            "stack package %s contains no payload files under data/ (profile.d excluded)" % filepath
+        )
+
+
 def upload(filename, filepath):
+    validate_package(filepath)
     with open(filepath, "rb") as f:
         result = bucket.put_object(filename, f.read())
         print("upload %s %s" % (filename, result.status))

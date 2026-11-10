@@ -1,0 +1,12 @@
+# Manual whole-stack protections. Exact name==version pins remain supported
+# as an escape hatch, but routine version pins are generated dynamically from
+# the Dockerfiles in the repositories listed by retention-repo.txt.
+# Pointer runtimes stay bare so their symlink targets and history remain intact.
+
+go
+java
+node
+php
+python
+ruby
+rust

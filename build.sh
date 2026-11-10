@@ -5,7 +5,8 @@ set -u
 DRYCC_REGISTRY=${DRYCC_REGISTRY:-${DEV_REGISTRY:-registry.drycc.cc}}
 
 # make sure we are in this dir
-CURRENT_DIR=$(cd "$(dirname "$0")"; pwd)
+# (BASH_SOURCE works both when executed and when sourced by the tests)
+CURRENT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)
 #dist dir
 DIST_DIR="${CURRENT_DIR}"/_dist
 
@@ -15,8 +16,26 @@ CODENAME="${CODENAME:?codename is required}"
 BUILDPACK_DEP_IMAGE="${DRYCC_REGISTRY}"/drycc/buildpack-dep:"${CODENAME}"
 
 function create-buildpack-dep {
+  if [ "${SKIP_CREATE_BUILDPACK_DEP:-}" = "1" ]; then
+    # the image was already created by this run (see reconcile)
+    return 0
+  fi
   # build buildpack-dep image
   podman build --pull -f "${CURRENT_DIR}"/Dockerfile --build-arg CODENAME="${CODENAME}" --build-arg DRYCC_REGISTRY="${DRYCC_REGISTRY}" . -t "${BUILDPACK_DEP_IMAGE}"
+}
+
+function test {
+  # Run the complete suite in the same dependency environment used by the
+  # nightly reconcile, cleaner, and retention generator.
+  create-buildpack-dep
+  podman run --rm \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    bash -c '
+      python -m unittest discover -s tests -p "test_*.py" -v &&
+      for test_script in tests/test_*.sh; do bash "$test_script" || exit 1; done
+    '
 }
 
 function build {
@@ -66,12 +85,143 @@ function symlink {
 }
 
 
-function renew() {
-  git tag -d "$1"
-  git push origin :refs/tags/"$1"
-  git tag "$1"
-  git push --tag
+function reconcile-report() {
+  # Report a per-item build result to GitHub: "alert" creates a
+  # deduplicated issue for a failed build; "success" records the build
+  # (a stack@version tag pointing at the built commit) and closes the
+  # open failure issue. Reporting problems are logged but never change
+  # the reconcile exit status.
+  local action="${1:?action is required}"
+  local stack="${2:?stack is required}"
+  local version="${3:?version is required}"
+  [ -n "${GITHUB_TOKEN:-}" ] || return 0
+  local report_args=("${action}" --stack "${stack}" --version "${version}")
+  if [ "${action}" = "alert" ]; then
+    report_args+=(--pipeline-url "${CI_PIPELINE_URL:-}")
+  fi
+  if ! podman run --rm \
+    --env GITHUB_TOKEN="${GITHUB_TOKEN}" \
+    --env CI_COMMIT_SHA="${CI_COMMIT_SHA:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/reconcile.py "${report_args[@]}"; then
+    echo "reconcile: ${action} reporting failed for ${stack}@${version}" >&2
+  fi
 }
+
+
+function reconcile-clean() {
+  # Clean old OSS objects after all planned builds have been attempted.
+  # Each matrix leg removes only its own arch, so amd64/arm64 never overlap. Dry-run
+  # mode is always non-destructive; the cron configuration opts into
+  # real deletion with CLEANER_DRY_RUN=0.
+  local clean_args=(-n "${CLEANER_KEEP_COUNT:-2}" --arch auto)
+  if [ "${RECONCILE_DRY_RUN:-}" = "1" ] || [ "${CLEANER_DRY_RUN:-}" = "1" ]; then
+    clean_args+=(--dry-run)
+  else
+    clean_args+=(--confirm)
+  fi
+  local generated_retention="${DIST_DIR}/retention-list.generated.txt"
+  mkdir -p "${DIST_DIR}"
+  echo "reconcile: generating dynamic retention list"
+  if ! podman run --rm \
+    --env GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/retention.py \
+    --repos retention-repo.txt \
+    --static retention-list.txt \
+    --output "${generated_retention}"; then
+    echo "reconcile: retention generation failed" >&2
+    return 1
+  fi
+  echo "reconcile: cleaning old OSS objects (keep=${CLEANER_KEEP_COUNT:-2} per series)"
+  if ! podman run --rm \
+    --env OSS_ENDPOINT="${OSS_ENDPOINT:-}" \
+    --env OSS_ACCESS_KEY_ID="${OSS_ACCESS_KEY_ID:-}" \
+    --env OSS_ACCESS_KEY_SECRET="${OSS_ACCESS_KEY_SECRET:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/cleaner.py oss-stacks "${clean_args[@]}" \
+    --retention-list "${generated_retention}"; then
+    echo "reconcile: cleanup failed" >&2
+    return 1
+  fi
+}
+
+
+function reconcile {
+  create-buildpack-dep
+  # Plan inside the buildpack image so /etc/os-release matches the build
+  # environment, the same source stack-utils uses for OS_FLAVOUR. All
+  # arguments are forwarded to "reconcile.py plan"; arch and flavour are
+  # detected inside the image unless given explicitly (--arch etc).
+  local plan
+  plan=$(podman run --rm \
+    --env OSS_ENDPOINT="${OSS_ENDPOINT:-}" \
+    --env OSS_ACCESS_KEY_ID="${OSS_ACCESS_KEY_ID:-}" \
+    --env OSS_ACCESS_KEY_SECRET="${OSS_ACCESS_KEY_SECRET:-}" \
+    --env GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/reconcile.py plan "$@")
+  if [ -z "${plan}" ]; then
+    echo "reconcile: nothing to build"
+  fi
+  if [ "${RECONCILE_DRY_RUN:-}" = "1" ]; then
+    # Observation mode: print the plan the nightly cron would build so it
+    # can be reviewed in the pipeline logs before enabling real builds.
+    echo "reconcile: dry run, $(printf '%s\n' "${plan}" | grep -c .) item(s) to build:"
+    printf '%s\n' "${plan}"
+    reconcile-clean
+    return $?
+  fi
+  local ok=0 failed=0
+  local succeeded_items=() failed_items=()
+  local item
+  while read -r item; do
+    [ -n "${item}" ] || continue
+    echo "reconcile: building ${item}"
+    # A dedicated process per item so set -e keeps its normal semantics
+    # inside build/upload (an if-context would disable it).
+    if SKIP_CREATE_BUILDPACK_DEP=1 bash "${CURRENT_DIR}/build.sh" all "${item}"; then
+      ok=$((ok + 1))
+      succeeded_items+=("${item}")
+      reconcile-report success "${item%@*}" "${item#*@}"
+    else
+      failed=$((failed + 1))
+      failed_items+=("${item}")
+      echo "reconcile: failed to build ${item}" >&2
+      reconcile-report alert "${item%@*}" "${item#*@}"
+    fi
+  done <<< "${plan}"
+  echo "reconcile: done, ok=${ok} failed=${failed}"
+  echo "reconcile: succeeded (${ok}):"
+  for item in "${succeeded_items[@]}"; do
+    echo "  ${item}"
+  done
+  echo "reconcile: failed (${failed}):"
+  for item in "${failed_items[@]}"; do
+    echo "  ${item}"
+  done
+
+  # Item failures must not prevent retention cleanup. Preserve their failed
+  # status and report it after cleanup so the pipeline still fails visibly.
+  local cleanup_status=ok
+  if ! reconcile-clean; then
+    cleanup_status=failed
+  fi
+  if [ "${failed}" -ne 0 ] || [ "${cleanup_status}" != "ok" ]; then
+    echo "reconcile: run failed: ${failed} build failure(s), cleanup=${cleanup_status}" >&2
+    return 1
+  fi
+  echo "reconcile: run succeeded"
+}
+
 
 function patch() {
     # Validate arguments

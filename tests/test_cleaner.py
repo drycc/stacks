@@ -99,10 +99,10 @@ class ParseObjectKeyTest(unittest.TestCase):
         )
 
     def test_stack_names_with_hyphens_stay_intact(self):
-        key = "stacks/apollo-adminservice/apollo-adminservice-2.3.0-linux-arm64-debian-12.tar.gz"
+        key = "stacks/example-service/example-service-2.3.0-linux-arm64-debian-12.tar.gz"
         self.assertEqual(
             checker.parse_object_key(key),
-            ("apollo-adminservice", "2.3.0", "arm64", "debian-12"),
+            ("example-service", "2.3.0", "arm64", "debian-12"),
         )
 
     def test_flavours_with_hyphens_stay_intact(self):

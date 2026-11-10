@@ -30,7 +30,7 @@ report() {
 }
 
 # Reproduce what generate-stack-template leaves behind, plus the empty bin
-# directory a failed build (e.g. tikv) typically creates before downloading.
+# directory a failed build (e.g. teststack) typically creates before downloading.
 make_scaffold() {
   local root="$1"
   mkdir -p "${root}/data/bin" "${root}/data/profile.d" "${root}/meta"

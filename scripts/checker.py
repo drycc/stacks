@@ -16,35 +16,11 @@ DEFAULT_RETENTION = 2
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
 
 repo_info_table = {
-    "apollo-adminservice": {
-        "name": "apollo",
-        "type": "github",
-        "owner": "apolloconfig",
-        "match": "^v[1-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
-    "apollo-configservice": {
-        "name": "apollo",
-        "type": "github",
-        "owner": "apolloconfig",
-        "match": "^v[1-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
-    "apollo-portal": {
-        "name": "apollo",
-        "type": "github",
-        "owner": "apolloconfig",
-        "match": "^v[1-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "alertmanager": {
         "name": "alertmanager",
         "type": "github",
         "owner": "prometheus",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
-    "cloudbeaver": {
-        "name": "cloudbeaver",
-        "type": "github",
-        "owner": "dbeaver",
-        "match": "[2-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
     "redis_exporter": {
         "name": "redis_exporter",
@@ -310,18 +286,6 @@ repo_info_table = {
         "owner": "mikefarah",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "juicefs": {
-        "name": "juicefs",
-        "type": "github",
-        "owner": "juicedata",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}(-rc){0,1}[0-9]{0,}$",
-    },
-    "tikv": {
-        "name": "tikv",
-        "type": "github",
-        "owner": "tikv",
-        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
     "prometheus": {
         "name": "prometheus",
         "type": "github",
@@ -393,12 +357,6 @@ repo_info_table = {
         "type": "github",
         "owner": "open-telemetry",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
-    "seaweedfs": {
-        "name": "seaweedfs",
-        "type": "github",
-        "owner": "seaweedfs",
-        "match": "^[0-9]{1,}\.[0-9]{1,}$",
     },
     "statsd_exporter": {
         "name": "statsd_exporter",

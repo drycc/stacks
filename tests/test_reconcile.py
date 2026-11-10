@@ -496,11 +496,13 @@ class CliTest(unittest.TestCase):
                 "alert", "--stack", "nginx", "--version", "1.31.8",
                 "--arch", "amd64", "--flavour", "debian-13",
                 "--pipeline-url", "https://ci/42",
+                "--log-file", "/tmp/nginx-build.log", "--sha", "a" * 40,
             ])
         self.assertEqual(rc, 0)
         alert.assert_called_once_with(
             "nginx", "1.31.8", arch="amd64", flavour="debian-13",
-            pipeline_url="https://ci/42",
+            pipeline_url="https://ci/42", log_file="/tmp/nginx-build.log",
+            sha="a" * 40,
         )
 
     def test_cli_alert_failure_returns_non_zero(self):
@@ -640,7 +642,7 @@ class FailureIssueAlertTest(unittest.TestCase):
 
     def test_alert_dedups_even_when_the_search_index_lags(self):
         # a freshly created issue is invisible to /search but present in
-        # the recent-open-issues listing: dedup must not create a second one
+        # the recent-open-issues listing: comment without creating a second one
         title = "build failed for nginx@1.31.8 on amd64/debian-13"
         session = AlertSession(search_items=[], recent_items=[{"number": 81, "title": title}])
         number = reconcile.alert_failure(
@@ -648,20 +650,38 @@ class FailureIssueAlertTest(unittest.TestCase):
         )
         self.assertIsNone(number)
         self.assertEqual(
-            [r for r in session.requests if r[0] == "POST"],
+            [r for r in session.requests
+             if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")],
             [],
         )
+        comments = [r for r in session.requests
+                    if r[0] == "POST" and r[1].endswith("/issues/81/comments")]
+        self.assertEqual(len(comments), 1)
 
-    def test_alert_skips_when_an_issue_is_already_open(self):
-        session = AlertSession(search_items=[{"number": 77, "title": "old"}])
-        number = reconcile.alert_failure(
-            "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
-        )
+    def test_alert_appends_a_failure_comment_when_an_issue_is_already_open(self):
+        title = "build failed for nginx@1.31.8 on amd64/debian-13"
+        session = AlertSession(search_items=[{"number": 77, "title": title}])
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as build_log:
+            build_log.write("configure complete\nRuntimeError: compiler failed\n")
+            build_log.flush()
+            number = reconcile.alert_failure(
+                "nginx", "1.31.8", arch="amd64", flavour="debian-13",
+                pipeline_url="https://ci/43", log_file=build_log.name,
+                sha="b" * 40, session=session,
+            )
         self.assertIsNone(number)
         self.assertEqual(
-            [r for r in session.requests if r[0] == "POST"],
+            [r for r in session.requests
+             if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")],
             [],
         )
+        comments = [r for r in session.requests
+                    if r[0] == "POST" and r[1].endswith("/issues/77/comments")]
+        self.assertEqual(len(comments), 1)
+        body = comments[0][2]["body"]
+        self.assertIn("https://ci/43", body)
+        self.assertIn("b" * 40, body)
+        self.assertIn("RuntimeError: compiler failed", body)
 
     def test_alert_without_token_makes_no_requests(self):
         os.environ.pop("GITHUB_TOKEN", None)
@@ -681,6 +701,101 @@ class FailureIssueAlertTest(unittest.TestCase):
                     if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")][0]
         self.assertNotIn("pipeline", creation[2]["body"])
 
+    def test_alert_includes_commit_and_sanitized_build_log(self):
+        session = AlertSession(search_items=[])
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as build_log:
+            build_log.write("dependency installed\n\x1b[31mRuntimeError: build failed\x1b[0m\n")
+            build_log.flush()
+            reconcile.alert_failure(
+                "nginx", "1.31.8", arch="amd64", flavour="debian-13",
+                log_file=build_log.name, sha="a" * 40, session=session,
+            )
+        creation = [r for r in session.requests
+                    if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")][0]
+        body = creation[2]["body"]
+        self.assertIn("- commit: %s" % ("a" * 40), body)
+        self.assertIn("Build log excerpt", body)
+        self.assertIn("RuntimeError: build failed", body)
+        self.assertNotIn("\x1b", body)
+
+    def test_alert_log_excerpt_keeps_the_last_200_lines(self):
+        session = AlertSession(search_items=[])
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as build_log:
+            for line in range(1, 206):
+                build_log.write("build-log-line-%03d\n" % line)
+            build_log.flush()
+            reconcile.alert_failure(
+                "nginx", "1.31.8", arch="amd64", flavour="debian-13",
+                log_file=build_log.name, session=session,
+            )
+        creation = [r for r in session.requests
+                    if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")][0]
+        body = creation[2]["body"]
+        self.assertNotIn("build-log-line-005", body)
+        self.assertIn("build-log-line-006", body)
+        self.assertIn("build-log-line-205", body)
+        self.assertIn("earlier build log omitted", body)
+
+    def test_alert_large_log_does_not_exceed_github_body_limit(self):
+        session = AlertSession(search_items=[])
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as build_log:
+            for _ in range(100):
+                build_log.write("x" * 5000 + "\n")
+            build_log.write("FINAL_BUILD_ERROR\n")
+            build_log.flush()
+            reconcile.alert_failure(
+                "nginx", "1.31.8", arch="amd64", flavour="debian-13",
+                log_file=build_log.name, session=session,
+            )
+        creation = [r for r in session.requests
+                    if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")][0]
+        body = creation[2]["body"]
+        self.assertLessEqual(len(body), 65536)
+        self.assertIn("FINAL_BUILD_ERROR", body)
+        self.assertIn("earlier build log omitted", body)
+
+    def test_alert_ignores_search_results_with_a_different_title(self):
+        session = AlertSession(search_items=[{
+            "number": 77,
+            "title": "build failed for nginx@1.31.7 on amd64/debian-13",
+        }])
+        number = reconcile.alert_failure(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
+        )
+        self.assertEqual(number, 555)
+        creations = [r for r in session.requests
+                     if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")]
+        self.assertEqual(len(creations), 1)
+        self.assertEqual(
+            [r for r in session.requests if r[0] == "POST" and r[1].endswith("/comments")],
+            [],
+        )
+
+    def test_alert_reads_large_logs_as_a_stream(self):
+        session = AlertSession(search_items=[])
+        log_open = mock.mock_open(read_data="first line\nFINAL_BUILD_ERROR\n")
+        with mock.patch("builtins.open", log_open):
+            reconcile.alert_failure(
+                "nginx", "1.31.8", arch="amd64", flavour="debian-13",
+                log_file="streamed-build.log", session=session,
+            )
+        handle = log_open()
+        handle.read.assert_not_called()
+        creation = [r for r in session.requests
+                    if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")][0]
+        self.assertIn("FINAL_BUILD_ERROR", creation[2]["body"])
+
+    def test_alert_missing_log_still_creates_an_issue(self):
+        session = AlertSession(search_items=[])
+        number = reconcile.alert_failure(
+            "nginx", "1.31.8", arch="amd64", flavour="debian-13",
+            log_file="/path/that/does/not/exist.log", session=session,
+        )
+        self.assertEqual(number, 555)
+        creations = [r for r in session.requests
+                     if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/issues")]
+        self.assertEqual(len(creations), 1)
+
 
 class FailureIssueResolveTest(unittest.TestCase):
     def setUp(self):
@@ -694,7 +809,10 @@ class FailureIssueResolveTest(unittest.TestCase):
             os.environ["GITHUB_TOKEN"] = self._orig_token
 
     def test_closes_every_matching_issue_with_a_comment(self):
-        session = AlertSession(search_items=[{"number": 77}, {"number": 78}])
+        title = "build failed for nginx@1.31.8 on amd64/debian-13"
+        session = AlertSession(search_items=[
+            {"number": 77, "title": title}, {"number": 78, "title": title},
+        ])
         closed = reconcile.resolve_failures(
             "nginx", "1.31.8", arch="amd64", flavour="debian-13", session=session,
         )

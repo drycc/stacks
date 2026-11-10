@@ -111,6 +111,14 @@ class NormalizeVersionTest(unittest.TestCase):
                 self.assertEqual(checker.normalize_version(tag_name), expected)
 
 
+class ObjectKeyTest(unittest.TestCase):
+    def test_matches_the_upload_layout(self):
+        self.assertEqual(
+            checker.object_key("nginx", "1.31.8", "amd64", "debian-13"),
+            "stacks/nginx/nginx-1.31.8-linux-amd64-debian-13.tar.gz",
+        )
+
+
 class GithubDiscoveryTest(unittest.TestCase):
     def setUp(self):
         self._orig_table = dict(checker.repo_info_table)

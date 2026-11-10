@@ -10,6 +10,12 @@ are never backfilled, so cleaner victims cannot reappear on a later plan.
 Missing versions inside an effective window are still built, subject to
 the per-run caps.
 
+ReconcileIssuesTest covers the daily failure-issue reconciliation: open
+issues are paginated and filtered to exact managed titles; a stack whose
+directory is gone is cancelled as not_planned without touching tags or
+OSS, an existing stack closes only for an exact normal artifact, and
+dry-run sends no comment or state change.
+
 Run: .venv/bin/python -m unittest discover -s tests -p 'test_reconcile.py' -v
 """
 
@@ -476,7 +482,9 @@ class CliTest(unittest.TestCase):
             env.pop(name, None)
         commands = (
             ["alert", "--stack", "nginx", "--version", "1.31.8"],
-            ["success", "--stack", "nginx", "--version", "1.31.8", "--sha", "a" * 40],
+            ["request", "--stack", "nginx", "--version", "1.31.8", "--sha", "a" * 40],
+            ["success", "--stack", "nginx", "--version", "1.31.8"],
+            ["reconcile-issues"],
         )
         for command in commands:
             with self.subTest(command=command[0]):
@@ -514,34 +522,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual(rc, 1)
 
     def test_cli_success_forwards_arguments(self):
-        with mock.patch("reconcile.record_build", return_value="refs/tags/nginx@1.31.8") as tag, \
-                mock.patch("reconcile.resolve_failures", return_value=[]) as resolve:
+        with mock.patch("reconcile.resolve_failures", return_value=[]) as resolve:
             rc = reconcile.main([
                 "success", "--stack", "nginx", "--version", "1.31.8",
-                "--sha", "a" * 40, "--arch", "amd64", "--flavour", "debian-13",
+                "--arch", "amd64", "--flavour", "debian-13",
             ])
         self.assertEqual(rc, 0)
-        tag.assert_called_once_with("nginx", "1.31.8", sha="a" * 40)
         resolve.assert_called_once_with(
             "nginx", "1.31.8", arch="amd64", flavour="debian-13",
         )
 
     def test_cli_success_returns_non_zero_when_reporting_fails(self):
-        with mock.patch("reconcile.record_build", side_effect=RuntimeError("github down")), \
-                mock.patch("reconcile.resolve_failures", side_effect=RuntimeError("github down")):
+        with mock.patch("reconcile.resolve_failures", side_effect=RuntimeError("github down")):
             rc = reconcile.main([
                 "success", "--stack", "nginx", "--version", "1.31.8",
             ])
         self.assertEqual(rc, 1)
-
-    def test_cli_success_still_resolves_after_tagging_fails(self):
-        with mock.patch("reconcile.record_build", side_effect=RuntimeError("github down")), \
-                mock.patch("reconcile.resolve_failures", return_value=[7]) as resolve:
-            rc = reconcile.main([
-                "success", "--stack", "nginx", "--version", "1.31.8",
-            ])
-        self.assertEqual(rc, 1)
-        resolve.assert_called_once()
 
 
 class FakeAlertResponse:
@@ -558,25 +554,32 @@ class FakeAlertResponse:
 
 
 class AlertSession:
-    """Serves GitHub search results, the recent-open-issues listing and
-    tag-ref creation, recording every request as
+    """Serves GitHub issues and tag refs, recording every request as
     (method, url, params_or_json_body) tuples.
 
     search_items feed the /search endpoint (indexed issues); recent_items
     feed the /issues listing (fresh issues the search index has not
     ingested yet). ref_status/ref_payload control the /git/refs POST
-    outcome (201 created, or 422 with a message)."""
+    outcome (201 created, or 422 with a message). delete_status controls
+    tag deletion. Every GitHub method requires the production timeout."""
 
     def __init__(self, search_items, created_number=555, recent_items=None,
-                 ref_status=201, ref_payload=None):
+                 ref_status=201, ref_payload=None, delete_status=204):
         self.requests = []
         self._search = {"total_count": len(search_items), "items": search_items}
         self._recent = recent_items or []
         self._created_number = created_number
         self._ref_status = ref_status
         self._ref_payload = ref_payload if ref_payload is not None else {}
+        self._delete_status = delete_status
 
-    def get(self, url, params=None, headers=None, **kwargs):
+    @staticmethod
+    def _check_timeout(timeout):
+        if timeout != 30:
+            raise AssertionError("GitHub request timeout must be 30, got %r" % timeout)
+
+    def get(self, url, params=None, headers=None, timeout=None, **kwargs):
+        self._check_timeout(timeout)
         self.requests.append(("GET", url, params))
         if url.endswith("/search/issues"):
             return FakeAlertResponse(self._search)
@@ -584,7 +587,8 @@ class AlertSession:
             return FakeAlertResponse(self._recent)
         raise AssertionError("unexpected GET %s" % url)
 
-    def post(self, url, json=None, headers=None, **kwargs):
+    def post(self, url, json=None, headers=None, timeout=None, **kwargs):
+        self._check_timeout(timeout)
         self.requests.append(("POST", url, json))
         if url.endswith("/issues"):
             return FakeAlertResponse({"number": self._created_number})
@@ -592,9 +596,15 @@ class AlertSession:
             return FakeAlertResponse(self._ref_payload, status=self._ref_status)
         return FakeAlertResponse({})
 
-    def patch(self, url, json=None, headers=None, **kwargs):
+    def patch(self, url, json=None, headers=None, timeout=None, **kwargs):
+        self._check_timeout(timeout)
         self.requests.append(("PATCH", url, json))
         return FakeAlertResponse({"state": "closed"})
+
+    def delete(self, url, headers=None, timeout=None, **kwargs):
+        self._check_timeout(timeout)
+        self.requests.append(("DELETE", url, None))
+        return FakeAlertResponse(status=self._delete_status)
 
 
 class FailureIssueAlertTest(unittest.TestCase):
@@ -639,6 +649,13 @@ class FailureIssueAlertTest(unittest.TestCase):
         self.assertIn("amd64/debian-13", body)
         self.assertIn("https://ci/42", body)
         self.assertIn("closes automatically", body)
+        # tag-driven retries: nightly retry only while on the nightly plan
+        self.assertIn("retries automatically only while the item"
+                      " remains on the nightly plan", body)
+        # manual outside-retention requests need an explicit tag re-push
+        self.assertIn("re-push or recreate the nginx@1.31.8 tag", body)
+        # the old perpetual-nightly-plan claim must be gone
+        self.assertNotIn("stays on the nightly plan", body)
 
     def test_alert_dedups_even_when_the_search_index_lags(self):
         # a freshly created issue is invisible to /search but present in
@@ -821,7 +838,8 @@ class FailureIssueResolveTest(unittest.TestCase):
         self.assertEqual(
             sorted(p[1].rsplit("/", 1)[-1] for p in patches), ["77", "78"],
         )
-        self.assertTrue(all(p[2] == {"state": "closed"} for p in patches))
+        self.assertTrue(all(
+            p[2] == {"state": "closed", "state_reason": "completed"} for p in patches))
         comments = [r for r in session.requests
                     if r[0] == "POST" and r[1].endswith("/comments")]
         self.assertEqual(len(comments), 2)
@@ -859,14 +877,314 @@ class FailureIssueResolveTest(unittest.TestCase):
         self.assertEqual(session.requests, [])
 
 
-class RecordBuildTest(unittest.TestCase):
-    """record_build tags a successfully built item as a build record.
+class ReconcileIssuesSession:
+    """Stateful GitHub issues endpoint for the daily reconciliation.
 
-    The tag is purely informational - OSS objects stay the completion
-    standard - and points at the commit that was checked out when the
-    build ran. The nightly cron is the only build path, so tags never
-    trigger anything.
+    Serves only state == "open" issues through numbered /issues pages at
+    the production page size, records every request as
+    (method, url, params_or_json_body) tuples, and applies PATCH state
+    changes to the issue store. Every GitHub call must use the production
+    timeout.
     """
+
+    def __init__(self, issues=()):
+        self.issues = [dict(issue) for issue in issues]
+        self.requests = []
+
+    @staticmethod
+    def _check_timeout(timeout):
+        if timeout != 30:
+            raise AssertionError("GitHub request timeout must be 30, got %r" % timeout)
+
+    def _open_issues(self):
+        return [issue for issue in self.issues if issue.get("state", "open") == "open"]
+
+    def get(self, url, params=None, headers=None, timeout=None, **kwargs):
+        self._check_timeout(timeout)
+        self.requests.append(("GET", url, params))
+        if not url.endswith("/repos/drycc/stacks/issues"):
+            raise AssertionError("unexpected GET %s" % url)
+        if not params or params.get("per_page") != 100 or not params.get("page"):
+            raise AssertionError("issue listing must use numbered 100-item pages")
+        start = (params["page"] - 1) * params["per_page"]
+        return FakeAlertResponse(self._open_issues()[start:start + params["per_page"]])
+
+    def post(self, url, json=None, headers=None, timeout=None, **kwargs):
+        self._check_timeout(timeout)
+        self.requests.append(("POST", url, json))
+        return FakeAlertResponse({})
+
+    def patch(self, url, json=None, headers=None, timeout=None, **kwargs):
+        self._check_timeout(timeout)
+        self.requests.append(("PATCH", url, json))
+        number = int(url.rsplit("/", 1)[-1])
+        for issue in self.issues:
+            if issue["number"] == number:
+                issue["state"] = (json or {}).get("state", "open")
+        return FakeAlertResponse({})
+
+    def mutations(self):
+        return [call for call in self.requests if call[0] in ("POST", "PATCH")]
+
+
+class FailureIssueTitleParsingTest(unittest.TestCase):
+    """Only exact managed failure titles may be reconciled."""
+
+    def test_parses_the_managed_format(self):
+        self.assertEqual(
+            reconcile.parse_failure_issue_title(
+                "build failed for nginx@1.31.8 on amd64/debian-13"),
+            {"stack": "nginx", "version": "1.31.8", "arch": "amd64",
+             "flavour": "debian-13"},
+        )
+
+    def test_rejects_every_non_managed_title(self):
+        for title in (
+            None,
+            "",
+            "update readme",
+            "build failed for nginx@1.31.8 on amd64",
+            "build failed for nginx@1.31.8 on amd64/debian-13 please look",
+            "re: build failed for nginx@1.31.8 on amd64/debian-13",
+            "Build failed for nginx@1.31.8 on amd64/debian-13",
+        ):
+            with self.subTest(title=title):
+                self.assertIsNone(reconcile.parse_failure_issue_title(title))
+
+
+class ReconcileIssuesTest(unittest.TestCase):
+    """The daily pass closes what is provably done or impossible and
+    leaves everything else open for a later retry."""
+
+    def setUp(self):
+        self._orig_token = os.environ.get("GITHUB_TOKEN")
+        os.environ["GITHUB_TOKEN"] = "test-token"
+        self.tmp = tempfile.TemporaryDirectory()
+        os.mkdir(os.path.join(self.tmp.name, "nginx"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        if self._orig_token is None:
+            os.environ.pop("GITHUB_TOKEN", None)
+        else:
+            os.environ["GITHUB_TOKEN"] = self._orig_token
+
+    def managed(self, number, stack="nginx", version="1.31.8",
+                arch="amd64", flavour="debian-13", **extra):
+        issue = {
+            "number": number,
+            "title": reconcile.failure_issue_title(stack, version, arch, flavour),
+            "state": "open",
+        }
+        issue.update(extra)
+        return issue
+
+    def run_pass(self, session, bucket=None, arch="amd64", **kwargs):
+        return reconcile.reconcile_issues(
+            arch=arch, session=session, bucket=bucket,
+            stacks_dir=self.tmp.name, **kwargs)
+
+    def test_paginates_open_issues_and_filters_prs_and_foreign_titles(self):
+        # a full 100-item page of entries that must all be filtered (pull
+        # requests carrying managed titles, then foreign titles), followed
+        # by a short second page holding the two managed amd64 issues, an
+        # other-arch issue and a closed issue that is never served
+        issues = []
+        for number in range(1, 51):
+            issues.append(self.managed(
+                number, pull_request={"url": "https://example.com/pr/%d" % number}))
+        for number in range(51, 101):
+            issues.append({
+                "number": number, "title": "unrelated issue %d" % number,
+                "state": "open",
+            })
+        issues.append(self.managed(101))
+        issues.append(self.managed(102, version="1.31.7"))
+        issues.append(self.managed(103, arch="arm64"))
+        issues.append(self.managed(104, state="closed"))
+        session = ReconcileIssuesSession(issues)
+        counts = self.run_pass(session, bucket=FakeBucket())
+        self.assertEqual(counts, {"closed": 0, "cancelled": 0, "skipped": 2})
+        gets = [call for call in session.requests if call[0] == "GET"]
+        self.assertEqual([call[2]["page"] for call in gets], [1, 2])
+        self.assertTrue(all(call[2]["per_page"] == 100 for call in gets))
+        self.assertEqual(session.mutations(), [])
+
+    def test_exact_normal_artifact_closes_the_issue_as_completed(self):
+        session = ReconcileIssuesSession([self.managed(77)])
+        counts = self.run_pass(session, bucket=FakeBucket([key("nginx", "1.31.8")]))
+        self.assertEqual(counts, {"closed": 1, "cancelled": 0, "skipped": 0})
+        patches = [call for call in session.requests if call[0] == "PATCH"]
+        self.assertEqual(len(patches), 1)
+        self.assertTrue(patches[0][1].endswith("/issues/77"))
+        self.assertEqual(
+            patches[0][2], {"state": "closed", "state_reason": "completed"},
+        )
+        comments = [call for call in session.requests
+                    if call[0] == "POST" and call[1].endswith("/issues/77/comments")]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("built successfully", comments[0][2]["body"])
+        # the explanation is posted before the state changes
+        self.assertLess(
+            session.requests.index(comments[0]),
+            session.requests.index(patches[0]),
+        )
+
+    def test_repairs_a_failed_success_side_resolution(self):
+        # the build succeeded and the artifact was uploaded, but the
+        # success-side resolution failed earlier: the issue is still open
+        # and the next daily pass must close it as completed
+        session = ReconcileIssuesSession([self.managed(91)])
+        counts = self.run_pass(session, bucket=FakeBucket([key("nginx", "1.31.8")]))
+        self.assertEqual(counts, {"closed": 1, "cancelled": 0, "skipped": 0})
+        patches = [call for call in session.requests if call[0] == "PATCH"]
+        self.assertEqual([p[1].rsplit("/", 1)[-1] for p in patches], ["91"])
+        self.assertEqual(
+            patches[0][2], {"state": "closed", "state_reason": "completed"},
+        )
+
+    def test_missing_artifact_stays_open(self):
+        session = ReconcileIssuesSession([self.managed(12)])
+        counts = self.run_pass(session, bucket=FakeBucket())
+        self.assertEqual(counts, {"closed": 0, "cancelled": 0, "skipped": 1})
+        self.assertEqual(session.mutations(), [])
+
+    def test_symlink_artifact_does_not_count_as_built(self):
+        session = ReconcileIssuesSession([self.managed(13)])
+        counts = self.run_pass(
+            session, bucket=FakeBucket([(key("nginx", "1.31.8"), "Symlink")]))
+        self.assertEqual(counts, {"closed": 0, "cancelled": 0, "skipped": 1})
+        self.assertEqual(session.mutations(), [])
+
+    def test_oss_error_keeps_the_issue_open_and_fails(self):
+        session = ReconcileIssuesSession([self.managed(14)])
+        with self.assertRaises(RuntimeError):
+            self.run_pass(session, bucket=BrokenBucket())
+        self.assertEqual(session.mutations(), [])
+        self.assertTrue(any(call[0] == "GET" for call in session.requests))
+
+    def test_removed_stack_cancels_every_matching_issue_without_oss_or_tags(self):
+        # a stack whose directory is gone can never be built again: both
+        # duplicates are cancelled as not_planned without consulting OSS
+        # (BrokenBucket would raise on any OSS access) or request tags
+        session = ReconcileIssuesSession([
+            self.managed(21, stack="removed-stack", version="2.0.0"),
+            self.managed(22, stack="removed-stack", version="2.0.0"),
+        ])
+        counts = self.run_pass(session, bucket=BrokenBucket())
+        self.assertEqual(counts, {"closed": 0, "cancelled": 2, "skipped": 0})
+        patches = [call for call in session.requests if call[0] == "PATCH"]
+        self.assertEqual(
+            sorted(p[1].rsplit("/", 1)[-1] for p in patches), ["21", "22"],
+        )
+        self.assertTrue(
+            all(p[2] == {"state": "closed", "state_reason": "not_planned"}
+                for p in patches),
+        )
+        comments = [call for call in session.requests
+                    if call[0] == "POST" and call[1].endswith("/comments")]
+        self.assertEqual(len(comments), 2)
+        for call in comments:
+            # distinct from the success-side resolution comment
+            self.assertIn("no longer exists", call[2]["body"])
+            self.assertIn("not planned", call[2]["body"])
+            self.assertNotIn("built successfully", call[2]["body"])
+
+    def test_absent_stacks_are_cancelled_before_an_oss_outage_aborts(self):
+        # cancellation needs no OSS, so removed stacks are still handled
+        # before the OSS uncertainty on the remaining issue fails the run
+        session = ReconcileIssuesSession([
+            self.managed(21, stack="removed-stack", version="2.0.0"),
+            self.managed(22),
+        ])
+        with self.assertRaises(RuntimeError):
+            self.run_pass(session, bucket=BrokenBucket())
+        patches = [call for call in session.requests if call[0] == "PATCH"]
+        self.assertEqual([p[1].rsplit("/", 1)[-1] for p in patches], ["21"])
+        self.assertTrue(patches[0][2]["state_reason"] == "not_planned")
+
+    def test_arch_filter_prevents_matrix_overlap(self):
+        for arch in ("amd64", "arm64"):
+            with self.subTest(arch=arch):
+                session = ReconcileIssuesSession([
+                    self.managed(31, arch="amd64"),
+                    self.managed(32, arch="arm64"),
+                ])
+                counts = self.run_pass(
+                    session, arch=arch,
+                    bucket=FakeBucket([key("nginx", "1.31.8", arch=arch)]))
+                self.assertEqual(counts, {"closed": 1, "cancelled": 0, "skipped": 0})
+                patched = [call[1].rsplit("/", 1)[-1]
+                           for call in session.requests if call[0] == "PATCH"]
+                self.assertEqual(patched, ["31" if arch == "amd64" else "32"])
+
+    def test_auto_arch_detects_the_running_arch(self):
+        session = ReconcileIssuesSession([
+            self.managed(61, arch="arm64"),
+            self.managed(62, arch="amd64"),
+        ])
+        bucket = FakeBucket([key("nginx", "1.31.8", arch="arm64")])
+        with mock.patch("reconcile.detect_arch", return_value="arm64"):
+            counts = self.run_pass(session, bucket=bucket, arch="auto")
+        self.assertEqual(counts, {"closed": 1, "cancelled": 0, "skipped": 0})
+        patched = [call[1].rsplit("/", 1)[-1]
+                   for call in session.requests if call[0] == "PATCH"]
+        self.assertEqual(patched, ["61"])
+
+    def test_dry_run_reports_without_comment_patch_or_state_change(self):
+        session = ReconcileIssuesSession([
+            self.managed(41),
+            self.managed(42, stack="removed-stack", version="2.0.0"),
+            self.managed(43, version="1.31.7"),
+        ])
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            counts = self.run_pass(
+                session, bucket=FakeBucket([key("nginx", "1.31.8")]), dry_run=True)
+        self.assertEqual(counts, {"closed": 1, "cancelled": 1, "skipped": 1})
+        self.assertEqual(session.mutations(), [])
+        out = stdout.getvalue()
+        self.assertIn("would close", out)
+        self.assertIn("completed", out)
+        self.assertIn("would cancel", out)
+        self.assertIn("not_planned", out)
+        self.assertNotIn("#43", out)
+
+    def test_without_token_makes_no_requests(self):
+        os.environ.pop("GITHUB_TOKEN", None)
+        session = ReconcileIssuesSession([self.managed(51)])
+        counts = self.run_pass(session, bucket=FakeBucket([key("nginx", "1.31.8")]))
+        self.assertEqual(counts, {"closed": 0, "cancelled": 0, "skipped": 0})
+        self.assertEqual(session.requests, [])
+
+    def test_cli_reconcile_issues_forwards_arguments(self):
+        with mock.patch(
+            "reconcile.reconcile_issues",
+            return_value={"closed": 1, "cancelled": 2, "skipped": 3},
+        ) as daily_pass:
+            rc = reconcile.main(["reconcile-issues", "--arch", "arm64", "--dry-run"])
+        self.assertEqual(rc, 0)
+        daily_pass.assert_called_once_with(arch="arm64", dry_run=True)
+
+    def test_cli_reconcile_issues_defaults_to_auto_arch_and_real_run(self):
+        with mock.patch(
+            "reconcile.reconcile_issues",
+            return_value={"closed": 0, "cancelled": 0, "skipped": 0},
+        ) as daily_pass:
+            rc = reconcile.main(["reconcile-issues"])
+        self.assertEqual(rc, 0)
+        daily_pass.assert_called_once_with(arch="auto", dry_run=False)
+
+    def test_cli_reconcile_issues_failure_returns_non_zero(self):
+        with mock.patch(
+            "reconcile.reconcile_issues", side_effect=RuntimeError("oss down"),
+        ):
+            rc = reconcile.main(["reconcile-issues", "--arch", "amd64"])
+        self.assertEqual(rc, 1)
+
+
+class RequestBuildTest(unittest.TestCase):
+    """Request tags start builds; abandoned requests delete those tags."""
 
     def setUp(self):
         self._orig_token = os.environ.get("GITHUB_TOKEN")
@@ -881,9 +1199,9 @@ class RecordBuildTest(unittest.TestCase):
         if self._orig_sha is not None:
             os.environ["CI_COMMIT_SHA"] = self._orig_sha
 
-    def test_creates_the_stack_tag_pointing_at_the_build_commit(self):
+    def test_creates_the_stack_tag_at_the_requested_commit(self):
         session = AlertSession(search_items=[])
-        ref = reconcile.record_build("nginx", "1.31.8", sha="a" * 40, session=session)
+        ref = reconcile.request_build("nginx", "1.31.8", sha="a" * 40, session=session)
         self.assertEqual(ref, "refs/tags/nginx@1.31.8")
         creations = [r for r in session.requests
                      if r[0] == "POST" and r[1].endswith("/repos/drycc/stacks/git/refs")]
@@ -893,15 +1211,15 @@ class RecordBuildTest(unittest.TestCase):
             {"ref": "refs/tags/nginx@1.31.8", "sha": "a" * 40},
         )
 
-    def test_skips_when_the_other_arch_leg_tagged_first(self):
-        # both matrix legs build the same item; whichever finishes first
-        # creates the tag and the second one gets a 422 "already exists"
+    def test_skips_when_the_other_arch_leg_requested_first(self):
+        # Both matrix legs may request the same item; the second gets a
+        # 422 "already exists" and must not try to recreate the ref.
         session = AlertSession(
             search_items=[],
             ref_status=422,
             ref_payload={"message": "Reference already exists"},
         )
-        ref = reconcile.record_build("nginx", "1.31.8", sha="a" * 40, session=session)
+        ref = reconcile.request_build("nginx", "1.31.8", sha="a" * 40, session=session)
         self.assertIsNone(ref)
 
     def test_a_422_that_is_not_a_duplicate_is_an_error(self):
@@ -911,27 +1229,80 @@ class RecordBuildTest(unittest.TestCase):
             ref_payload={"message": "Invalid request"},
         )
         with self.assertRaises(RuntimeError):
-            reconcile.record_build("nginx", "1.31.8", sha="a" * 40, session=session)
+            reconcile.request_build("nginx", "1.31.8", sha="a" * 40, session=session)
 
     def test_sha_defaults_to_ci_commit_sha(self):
         os.environ["CI_COMMIT_SHA"] = "b" * 40
         session = AlertSession(search_items=[])
-        reconcile.record_build("nginx", "1.31.8", session=session)
+        reconcile.request_build("nginx", "1.31.8", session=session)
         creation = [r for r in session.requests
                     if r[0] == "POST" and r[1].endswith("/git/refs")][0]
         self.assertEqual(creation[2]["sha"], "b" * 40)
 
-    def test_without_token_makes_no_requests(self):
+    def test_request_without_token_makes_no_requests(self):
         os.environ.pop("GITHUB_TOKEN", None)
         session = AlertSession(search_items=[])
-        ref = reconcile.record_build("nginx", "1.31.8", sha="a" * 40, session=session)
+        ref = reconcile.request_build("nginx", "1.31.8", sha="a" * 40, session=session)
         self.assertIsNone(ref)
         self.assertEqual(session.requests, [])
 
+    def test_deletes_the_stack_tag(self):
+        session = AlertSession(search_items=[])
+        self.assertTrue(reconcile.delete_build_tag("nginx", "1.31.8", session=session))
+        self.assertEqual(
+            [r for r in session.requests if r[0] == "DELETE"],
+            [("DELETE",
+              "https://api.github.com/repos/drycc/stacks/git/refs/tags/nginx@1.31.8",
+              None)],
+        )
+
+    def test_deleting_an_already_absent_tag_succeeds(self):
+        session = AlertSession(search_items=[], delete_status=404)
+        self.assertTrue(reconcile.delete_build_tag("nginx", "1.31.8", session=session))
+
+    def test_an_unexpected_deletion_error_propagates(self):
+        session = AlertSession(search_items=[], delete_status=500)
+        with self.assertRaises(RuntimeError):
+            reconcile.delete_build_tag("nginx", "1.31.8", session=session)
+
+    def test_delete_without_token_makes_no_requests(self):
+        os.environ.pop("GITHUB_TOKEN", None)
+        session = AlertSession(search_items=[])
+        self.assertFalse(reconcile.delete_build_tag("nginx", "1.31.8", session=session))
+        self.assertEqual(session.requests, [])
+
+    def test_cli_request_forwards_arguments(self):
+        with mock.patch("reconcile.request_build", return_value="refs/tags/nginx@1.31.8") as request:
+            rc = reconcile.main([
+                "request", "--stack", "nginx", "--version", "1.31.8", "--sha", "a" * 40,
+            ])
+        self.assertEqual(rc, 0)
+        request.assert_called_once_with("nginx", "1.31.8", sha="a" * 40)
+
+    def test_cli_request_failure_returns_non_zero(self):
+        with mock.patch("reconcile.request_build", side_effect=RuntimeError("github down")):
+            rc = reconcile.main(["request", "--stack", "nginx", "--version", "1.31.8"])
+        self.assertEqual(rc, 1)
+
+    def test_cli_abandon_forwards_arguments(self):
+        with mock.patch("reconcile.delete_build_tag", return_value=True) as delete:
+            rc = reconcile.main(["abandon", "--stack", "nginx", "--version", "1.31.8"])
+        self.assertEqual(rc, 0)
+        delete.assert_called_once_with("nginx", "1.31.8")
+
+    def test_cli_abandon_failure_returns_non_zero(self):
+        with mock.patch("reconcile.delete_build_tag", side_effect=RuntimeError("github down")):
+            rc = reconcile.main(["abandon", "--stack", "nginx", "--version", "1.31.8"])
+        self.assertEqual(rc, 1)
+
+    def test_cli_abandon_without_token_returns_non_zero(self):
+        with mock.patch("reconcile.delete_build_tag", return_value=False):
+            rc = reconcile.main(["abandon", "--stack", "nginx", "--version", "1.31.8"])
+        self.assertEqual(rc, 1)
+
 
 class SuccessReportTest(unittest.TestCase):
-    """cmd_success: record the build tag and close failure issues in one
-    report call, tolerating either half failing."""
+    """cmd_success only resolves failure issues; the request tag remains."""
 
     def setUp(self):
         self._orig_token = os.environ.get("GITHUB_TOKEN")
@@ -946,37 +1317,29 @@ class SuccessReportTest(unittest.TestCase):
         if self._orig_sha is not None:
             os.environ["CI_COMMIT_SHA"] = self._orig_sha
 
-    def test_tags_the_item_and_closes_its_failure_issues(self):
+    def test_closes_failure_issues_without_creating_a_ref(self):
         title = "build failed for nginx@1.31.8 on amd64/debian-13"
         session = AlertSession(search_items=[{"number": 77, "title": title}])
         with mock.patch("reconcile.requests", session):
-            rc = reconcile.main([
+            success_rc = reconcile.main([
                 "success", "--stack", "nginx", "--version", "1.31.8",
-                "--sha", "a" * 40, "--arch", "amd64", "--flavour", "debian-13",
+                "--arch", "amd64", "--flavour", "debian-13",
             ])
-        self.assertEqual(rc, 0)
-        ref_posts = [r for r in session.requests
-                     if r[0] == "POST" and r[1].endswith("/git/refs")]
-        self.assertEqual(len(ref_posts), 1)
-        self.assertEqual(ref_posts[0][2]["ref"], "refs/tags/nginx@1.31.8")
+        self.assertEqual(success_rc, 0)
+        self.assertEqual([r for r in session.requests if r[1].endswith("/git/refs")], [])
         patches = [r for r in session.requests if r[0] == "PATCH"]
         self.assertEqual(len(patches), 1)
         self.assertTrue(patches[0][1].endswith("/issues/77"))
 
-    def test_a_duplicate_tag_still_closes_the_failure_issues(self):
-        title = "build failed for nginx@1.31.8 on amd64/debian-13"
-        session = AlertSession(
-            search_items=[{"number": 77, "title": title}],
-            ref_status=422,
-            ref_payload={"message": "Reference already exists"},
-        )
+    def test_success_without_open_issues_makes_no_mutations(self):
+        session = AlertSession(search_items=[])
         with mock.patch("reconcile.requests", session):
-            rc = reconcile.main([
+            success_rc = reconcile.main([
                 "success", "--stack", "nginx", "--version", "1.31.8",
-                "--sha", "a" * 40, "--arch", "amd64", "--flavour", "debian-13",
+                "--arch", "amd64", "--flavour", "debian-13",
             ])
-        self.assertEqual(rc, 0)
-        self.assertEqual(len([r for r in session.requests if r[0] == "PATCH"]), 1)
+        self.assertEqual(success_rc, 0)
+        self.assertEqual([r for r in session.requests if r[0] in ("POST", "PATCH", "DELETE")], [])
 
 
 if __name__ == "__main__":

@@ -16,21 +16,29 @@ backfilled, while a new release in an older maintained series can still
 be built alongside a newer series. Missing versions inside an effective
 window are still built, subject to the per-run caps.
 
-The alert subcommand tracks a failed build as a deduplicated GitHub issue,
-appending later failures for the same item as comments with bounded build-log
-excerpts. The success subcommand records a successful build - a stack@version
-tag pointing at the commit that built it, purely as a human-readable history
-since the nightly cron is the only build path - and closes the open failure
-issue. Tags record builds; they never trigger them.
+The request subcommand creates a stack@version tag to start a build, and
+abandon deletes that request after a failed build. The alert subcommand tracks
+a failed build as a deduplicated GitHub issue, appending later failures for
+the same item as comments with bounded build-log excerpts. The success
+subcommand only closes the open failure issue; it retains the request tag as
+the build record.
+
+The reconcile-issues subcommand is the daily failure-issue sweep: it closes
+open failure issues whose exact artifact now exists (completed) or whose
+stack directory is gone (not_planned), and leaves everything else open for
+a later retry.
 
 Usage:
     python3 scripts/reconcile.py plan [--arch ARCH] [--flavour FLAVOUR]
         [--max-per-stack N] [--max-total N] [--retention N] [--stack NAME]
+    python3 scripts/reconcile.py request --stack NAME --version VERSION [--sha SHA]
+    python3 scripts/reconcile.py abandon --stack NAME --version VERSION
     python3 scripts/reconcile.py alert --stack NAME --version VERSION
         [--pipeline-url URL] [--log-file PATH] [--sha SHA]
         [--arch ARCH] [--flavour FLAVOUR]
     python3 scripts/reconcile.py success --stack NAME --version VERSION
-        [--sha SHA] [--arch ARCH] [--flavour FLAVOUR]
+        [--arch ARCH] [--flavour FLAVOUR]
+    python3 scripts/reconcile.py reconcile-issues [--arch ARCH|auto] [--dry-run]
 """
 
 import argparse
@@ -52,7 +60,7 @@ def object_key(stack, version, arch, flavour):
     Must stay in sync with the TARNAME layout produced by stack-utils
     (${STACK_NAME}-${STACK_VERSION}-${OS_NAME}-${OS_ARCH}-${OS_FLAVOUR}).
     """
-    return "stacks/%s/%s-%s-linux-%s-%s.tar.gz" % (stack, stack, version, arch, flavour)
+    return checker.object_key(stack, version, arch, flavour)
 
 
 def detect_arch():
@@ -244,6 +252,26 @@ def failure_issue_title(stack, version, arch, flavour):
     return "build failed for %s@%s on %s/%s" % (stack, version, arch, flavour)
 
 
+MANAGED_ISSUE_TITLE = re.compile(
+    r"^build failed for (?P<stack>[a-z0-9][a-z0-9_-]*)@(?P<version>[^@\s]+)"
+    r" on (?P<arch>[^/\s]+)/(?P<flavour>\S+)$"
+)
+
+
+def parse_failure_issue_title(title):
+    """Return the managed title's {stack, version, arch, flavour} dict.
+
+    Returns None for every other title: pull requests, human-written
+    issues and stale formats are never touched by the reconciliation.
+    """
+    if not isinstance(title, str):
+        return None
+    match = MANAGED_ISSUE_TITLE.fullmatch(title)
+    if match is None:
+        return None
+    return match.groupdict()
+
+
 def find_open_failure_issues(title, session, headers):
     """Return the open issues whose title matches.
 
@@ -260,6 +288,7 @@ def find_open_failure_issues(title, session, headers):
         "https://api.github.com/search/issues",
         params={"q": 'repo:drycc/stacks is:issue is:open in:title "%s"' % title},
         headers=headers,
+        timeout=30,
     )
     response.raise_for_status()
     found = {
@@ -276,12 +305,52 @@ def find_open_failure_issues(title, session, headers):
             "per_page": 100,
         },
         headers=headers,
+        timeout=30,
     )
     listing.raise_for_status()
     for issue in listing.json():
         if "pull_request" not in issue and issue["title"] == title:
             found.setdefault(issue["number"], issue)
     return sorted(found.values(), key=lambda issue: issue["number"])
+
+
+ISSUE_PAGE_SIZE = 100
+
+
+def list_open_failure_issues(session, headers):
+    """Return (issue, parsed_title) for every open managed failure issue.
+
+    The open-issue listing is paginated until a short page; pull requests
+    and any title that is not exactly a managed failure title are dropped.
+    Only open issues are listed, so closed history is never revisited.
+    """
+    selected = []
+    page = 1
+    while True:
+        response = session.get(
+            "https://api.github.com/repos/drycc/stacks/issues",
+            params={
+                "state": "open",
+                "sort": "created",
+                "direction": "desc",
+                "per_page": ISSUE_PAGE_SIZE,
+                "page": page,
+            },
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        batch = response.json()
+        for issue in batch:
+            if "pull_request" in issue:
+                continue
+            parsed = parse_failure_issue_title(issue.get("title"))
+            if parsed is None:
+                continue
+            selected.append((issue, parsed))
+        if len(batch) < ISSUE_PAGE_SIZE:
+            return selected
+        page += 1
 
 
 FAILURE_LOG_MAX_LINES = 200
@@ -333,9 +402,13 @@ def _failure_body(stack, version, arch, flavour, pipeline_url, sha=None,
         lines.append("- pipeline: %s" % pipeline_url)
     lines += [
         "",
-        "The item stays on the nightly plan until it builds successfully, so"
-        " this failure will repeat until the underlying error is fixed."
-        " This issue closes automatically once the build succeeds.",
+        "The %s@%s request tag is deleted after a failed build, so this"
+        " failure retries automatically only while the item remains on the"
+        " nightly plan (the nightly run recreates the tag each night)."
+        " Otherwise, such as a manual request outside the retention window,"
+        " nothing retries it: re-push or recreate the %s@%s tag to try"
+        " again. This issue closes automatically once the build succeeds."
+        % (stack, version, stack, version),
     ]
     if log_excerpt:
         lines += [
@@ -378,6 +451,7 @@ def alert_failure(stack, version, arch=None, flavour=None, pipeline_url=None,
                 % issue["number"],
                 json={"body": body},
                 headers=headers,
+                timeout=30,
             )
             response.raise_for_status()
         print(
@@ -390,11 +464,36 @@ def alert_failure(stack, version, arch=None, flavour=None, pipeline_url=None,
         "https://api.github.com/repos/drycc/stacks/issues",
         json={"title": title, "body": body},
         headers=headers,
+        timeout=30,
     )
     response.raise_for_status()
     number = response.json()["number"]
     print("reconcile: alert: created issue #%d (%s)" % (number, title), file=sys.stderr)
     return number
+
+
+def _close_issue(session, headers, number, comment, state_reason):
+    """Comment, then close an issue with an explicit state_reason.
+
+    Shared by the success-side resolution (completed) and the daily
+    reconciliation (completed for built artifacts, not_planned for removed
+    stacks) so every closure posts its explanation before its state and
+    keeps the normal-resolution and removal comments distinct.
+    """
+    response = session.post(
+        "https://api.github.com/repos/drycc/stacks/issues/%d/comments" % number,
+        json={"body": comment},
+        headers=headers,
+        timeout=30,
+    )
+    response.raise_for_status()
+    patched = session.patch(
+        "https://api.github.com/repos/drycc/stacks/issues/%d" % number,
+        json={"state": "closed", "state_reason": state_reason},
+        headers=headers,
+        timeout=30,
+    )
+    patched.raise_for_status()
 
 
 def resolve_failures(stack, version, arch=None, flavour=None, session=None):
@@ -414,23 +513,13 @@ def resolve_failures(stack, version, arch=None, flavour=None, session=None):
     title = failure_issue_title(stack, version, arch, flavour)
     closed = []
     for issue in find_open_failure_issues(title, session, headers):
-        comment = session.post(
-            "https://api.github.com/repos/drycc/stacks/issues/%d/comments"
-            % issue["number"],
-            json={
-                "body": "Closing automatically: %s@%s on %s/%s built"
-                " successfully in the nightly reconcile run."
-                % (stack, version, arch, flavour),
-            },
-            headers=headers,
+        _close_issue(
+            session, headers, issue["number"],
+            "Closing automatically: %s@%s on %s/%s built"
+            " successfully in the nightly reconcile run."
+            % (stack, version, arch, flavour),
+            "completed",
         )
-        comment.raise_for_status()
-        patched = session.patch(
-            "https://api.github.com/repos/drycc/stacks/issues/%d" % issue["number"],
-            json={"state": "closed"},
-            headers=headers,
-        )
-        patched.raise_for_status()
         closed.append(issue["number"])
     if closed:
         print(
@@ -441,9 +530,102 @@ def resolve_failures(stack, version, arch=None, flavour=None, session=None):
     return closed
 
 
+def _removed_stack_comment(stack, version, arch, flavour):
+    """The removal close comment: distinct from the success-side wording."""
+    return (
+        "Cancelling automatically: the %s stack directory no longer exists"
+        " in this repository, so %s@%s on %s/%s can never be built."
+        " Closing this issue as not planned." % (stack, stack, version, arch, flavour)
+    )
+
+
+def reconcile_issues(arch=None, dry_run=False, session=None, bucket=None,
+                      stacks_dir=None):
+    """Close open failure issues that no longer need attention.
+
+    One daily pass over every open managed failure issue of the selected
+    arch: a stack whose directory is gone is cancelled as not_planned
+    without consulting request tags or OSS (it can never be built again),
+    and an issue whose exact normal artifact exists is closed as
+    completed - this also repairs a success whose resolution report
+    failed earlier. Anything else (artifact still missing) stays open,
+    and GitHub or OSS errors propagate so the caller can retry the run.
+
+    Returns {"closed": n, "cancelled": n, "skipped": n}. Dry run performs
+    the same discovery and verification but prints the closures it would
+    make instead of sending any comment or state change.
+    """
+    headers = _github_headers()
+    if headers is None:
+        print("reconcile: reconcile-issues: GITHUB_TOKEN not set, skipping",
+              file=sys.stderr)
+        return {"closed": 0, "cancelled": 0, "skipped": 0}
+    if session is None:
+        session = requests
+    if arch in (None, "auto"):
+        arch = detect_arch()
+    if stacks_dir is None:
+        stacks_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "stacks")
+    current_stacks = {
+        name for name in os.listdir(stacks_dir)
+        if os.path.isdir(os.path.join(stacks_dir, name))
+    }
+    counts = {"closed": 0, "cancelled": 0, "skipped": 0}
+    storage_module = None
+    for issue, parsed in list_open_failure_issues(session, headers):
+        if parsed["arch"] != arch:
+            # The other matrix leg owns this issue; closing it here would
+            # contradict that leg's own verification.
+            continue
+        number = issue["number"]
+        stack = parsed["stack"]
+        if stack not in current_stacks:
+            if dry_run:
+                print("would cancel (not_planned) #%d (%s@%s)"
+                      % (number, stack, parsed["version"]))
+            else:
+                _close_issue(
+                    session, headers, number,
+                    _removed_stack_comment(
+                        stack, parsed["version"], parsed["arch"],
+                        parsed["flavour"]),
+                    "not_planned",
+                )
+                print("cancelled (not_planned) #%d (%s@%s)"
+                      % (number, stack, parsed["version"]))
+            counts["cancelled"] += 1
+            continue
+        if storage_module is None:
+            # Imported lazily: cancelling removed stacks must work without
+            # any OSS credentials or connectivity.
+            import storage
+            storage_module = storage
+        if storage_module.artifact_exists(
+                stack, parsed["version"], parsed["arch"], parsed["flavour"],
+                bucket=bucket):
+            if dry_run:
+                print("would close (completed) #%d (%s@%s)"
+                      % (number, stack, parsed["version"]))
+            else:
+                _close_issue(
+                    session, headers, number,
+                    "Closing automatically: %s@%s on %s/%s built"
+                    " successfully in the nightly reconcile run."
+                    % (stack, parsed["version"], parsed["arch"], parsed["flavour"]),
+                    "completed",
+                )
+                print("closed (completed) #%d (%s@%s)"
+                      % (number, stack, parsed["version"]))
+            counts["closed"] += 1
+        else:
+            counts["skipped"] += 1
+    return counts
+
+
 def _current_commit():
-    """The commit to point build-record tags at: CI_COMMIT_SHA when running
-    in a pipeline, git HEAD otherwise (the workspace is mounted into the
+    """The commit to point request tags at: CI_COMMIT_SHA when running in a
+    pipeline, git HEAD otherwise (the workspace is mounted into the
     reporting container)."""
     sha = os.environ.get("CI_COMMIT_SHA")
     if sha:
@@ -451,19 +633,18 @@ def _current_commit():
     return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
 
-def record_build(stack, version, sha=None, session=None):
-    """Create the stack@version tag recording a successfully built item.
+def request_build(stack, version, sha=None, session=None):
+    """Create the stack@version tag that requests a build.
 
-    The tag is lightweight, points at the build-time commit, and is a
-    record for humans: OSS objects remain the build-completion standard
-    and tags trigger nothing. Both matrix legs build the same item, so
-    whichever finishes first creates the tag and the other skips on the
-    422 "Reference already exists". Returns the created ref, or None
-    when the tag already exists or no GITHUB_TOKEN is available.
+    The lightweight tag points at the requested commit. Both matrix legs may
+    request the same item, so whichever finishes first creates the tag and
+    the other skips on the 422 "Reference already exists". Returns the
+    created ref, or None when the tag already exists or no GITHUB_TOKEN is
+    available.
     """
     headers = _github_headers()
     if headers is None:
-        print("reconcile: tag: GITHUB_TOKEN not set, skipping", file=sys.stderr)
+        print("reconcile: request: GITHUB_TOKEN not set, skipping", file=sys.stderr)
         return None
     if session is None:
         session = requests
@@ -474,13 +655,58 @@ def record_build(stack, version, sha=None, session=None):
         "https://api.github.com/repos/drycc/stacks/git/refs",
         json={"ref": ref, "sha": sha},
         headers=headers,
+        timeout=30,
     )
     if response.status_code == 422 and "already exists" in response.json().get("message", ""):
-        print("reconcile: tag: %s already exists, skipping" % ref, file=sys.stderr)
+        print("reconcile: request: %s already exists, skipping" % ref, file=sys.stderr)
         return None
     response.raise_for_status()
-    print("reconcile: tag: created %s at %s" % (ref, sha[:12]), file=sys.stderr)
+    print("reconcile: request: created %s at %s" % (ref, sha[:12]), file=sys.stderr)
     return ref
+
+
+def delete_build_tag(stack, version, session=None):
+    """Delete a failed build's request tag, accepting an absent tag as success.
+
+    Returns False only when no GITHUB_TOKEN is available; unexpected GitHub
+    errors propagate to the caller.
+    """
+    headers = _github_headers()
+    if headers is None:
+        print("reconcile: abandon: GITHUB_TOKEN not set, skipping", file=sys.stderr)
+        return False
+    if session is None:
+        session = requests
+    ref = "tags/%s@%s" % (stack, version)
+    response = session.delete(
+        "https://api.github.com/repos/drycc/stacks/git/refs/%s" % ref,
+        headers=headers,
+        timeout=30,
+    )
+    if response.status_code == 404:
+        print("reconcile: abandon: refs/%s already absent" % ref, file=sys.stderr)
+        return True
+    response.raise_for_status()
+    print("reconcile: abandon: deleted refs/%s" % ref, file=sys.stderr)
+    return True
+
+
+def cmd_request(args):
+    try:
+        request_build(args.stack, args.version, sha=args.sha)
+    except Exception as exc:  # noqa: BLE001 - report request failures distinctly
+        print("reconcile: request failed: %s" % exc, file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_abandon(args):
+    try:
+        deleted = delete_build_tag(args.stack, args.version)
+    except Exception as exc:  # noqa: BLE001 - report deletion failures distinctly
+        print("reconcile: abandon failed: %s" % exc, file=sys.stderr)
+        return 1
+    return 0 if deleted else 1
 
 
 def cmd_alert(args):
@@ -497,24 +723,29 @@ def cmd_alert(args):
 
 
 def cmd_success(args):
-    """Record a successful build: tag it and close its failure issues.
-
-    Either half may fail without stopping the other; the command exits
-    non-zero so the failure is visible in the logs, but build.sh treats
-    all reporting failures as non-fatal anyway.
-    """
-    problems = []
-    try:
-        record_build(args.stack, args.version, sha=args.sha)
-    except Exception as exc:  # noqa: BLE001 - reporting must not mask failures
-        print("reconcile: tag failed: %s" % exc, file=sys.stderr)
-        problems.append("tag")
+    """Close failure issues after success without creating another ref."""
     try:
         resolve_failures(args.stack, args.version, arch=args.arch, flavour=args.flavour)
     except Exception as exc:  # noqa: BLE001 - reporting must not mask failures
         print("reconcile: resolve failed: %s" % exc, file=sys.stderr)
-        problems.append("resolve")
-    return 1 if problems else 0
+        return 1
+    return 0
+
+
+def cmd_reconcile_issues(args):
+    try:
+        counts = reconcile_issues(arch=args.arch, dry_run=args.dry_run)
+    except Exception as exc:  # noqa: BLE001 - failures stay retryable
+        print("reconcile: reconcile-issues failed: %s" % exc, file=sys.stderr)
+        return 1
+    print(
+        "reconcile: reconcile-issues%s: arch=%s, %d closed, %d cancelled,"
+        " %d left open"
+        % (" (dry run)" if args.dry_run else "", args.arch,
+           counts["closed"], counts["cancelled"], counts["skipped"]),
+        file=sys.stderr,
+    )
+    return 0
 
 
 def main(argv=None):
@@ -547,6 +778,20 @@ def main(argv=None):
         "--stack", action="append", dest="stacks",
         help="limit planning to this stack (repeatable)",
     )
+    request_parser = subparsers.add_parser(
+        "request", help="create a stack@version tag to request a build"
+    )
+    request_parser.add_argument("--stack", required=True)
+    request_parser.add_argument("--version", required=True)
+    request_parser.add_argument(
+        "--sha", default=None,
+        help="commit to build (default: CI_COMMIT_SHA or git HEAD)",
+    )
+    abandon_parser = subparsers.add_parser(
+        "abandon", help="delete the request tag after a failed build"
+    )
+    abandon_parser.add_argument("--stack", required=True)
+    abandon_parser.add_argument("--version", required=True)
     alert_parser = subparsers.add_parser(
         "alert", help="create or comment on the deduplicated issue for a failed build"
     )
@@ -564,16 +809,24 @@ def main(argv=None):
     alert_parser.add_argument("--arch", default=None, help="default: detected")
     alert_parser.add_argument("--flavour", default=None, help="default: detected")
     success_parser = subparsers.add_parser(
-        "success", help="record a successful build (tag it and close its failure issue)"
+        "success", help="close the failure issue for a successful build"
     )
     success_parser.add_argument("--stack", required=True)
     success_parser.add_argument("--version", required=True)
-    success_parser.add_argument(
-        "--sha", default=None,
-        help="commit to point the tag at (default: CI_COMMIT_SHA or git HEAD)",
-    )
     success_parser.add_argument("--arch", default=None, help="default: detected")
     success_parser.add_argument("--flavour", default=None, help="default: detected")
+    reconcile_issues_parser = subparsers.add_parser(
+        "reconcile-issues",
+        help="close open failure issues whose artifact exists or stack is gone",
+    )
+    reconcile_issues_parser.add_argument(
+        "--arch", default="auto",
+        help="reconcile this matrix arch only (default: auto, i.e. detected)",
+    )
+    reconcile_issues_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="print the closures without commenting or changing state",
+    )
     args = parser.parse_args(argv)
     if args.command == "plan":
         if args.retention < 1:
@@ -583,10 +836,16 @@ def main(argv=None):
         if args.flavour is None:
             args.flavour = detect_flavour()
         return cmd_plan(args)
+    if args.command == "request":
+        return cmd_request(args)
+    if args.command == "abandon":
+        return cmd_abandon(args)
     if args.command == "alert":
         return cmd_alert(args)
     if args.command == "success":
         return cmd_success(args)
+    if args.command == "reconcile-issues":
+        return cmd_reconcile_issues(args)
     return 2
 
 

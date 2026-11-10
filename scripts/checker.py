@@ -451,6 +451,11 @@ def normalize_version(tag_name):
     return version
 
 
+def object_key(stack, version, arch, flavour):
+    """The OSS key a built stack version is uploaded to."""
+    return "stacks/%s/%s-%s-linux-%s-%s.tar.gz" % (stack, stack, version, arch, flavour)
+
+
 def parse_object_key(key):
     """stacks/<stack>/<stack>-<version>-linux-<arch>-<flavour>.tar.gz ->
     (stack, version, arch, flavour), or None when the key does not

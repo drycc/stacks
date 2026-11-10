@@ -85,11 +85,20 @@ function symlink {
 }
 
 
+function run_logged() {
+  local log_file="${1:?LOG_FILE is required}" command_status
+  shift 1
+  "$@" 2>&1 | tee -a "${log_file}"
+  command_status=${PIPESTATUS[0]}
+  return "${command_status}"
+}
+
+
 function reconcile-report() {
   # Report a per-item build result to GitHub: "alert" creates or comments on
-  # the deduplicated issue for a failed build; "success" records the build
-  # (a stack@version tag pointing at the built commit) and closes the open
-  # failure issue. Reporting problems never change the reconcile exit status.
+  # the deduplicated issue for a failed build; "success" only closes the open
+  # failure issue and retains the request tag. Reporting problems never change
+  # the publish or reconcile exit status.
   local action="${1:?action is required}"
   local stack="${2:?stack is required}"
   local version="${3:?version is required}"
@@ -114,16 +123,40 @@ function reconcile-report() {
 }
 
 
+function reconcile-request() {
+  # Create the tag that schedules a stack build. Keep the request command as
+  # the final command so its status is returned unchanged to the caller.
+  local stack="${1:?stack is required}"
+  local version="${2:?version is required}"
+  local request_args=(request --stack "${stack}" --version "${version}")
+  if [ -n "${CI_COMMIT_SHA:-}" ]; then
+    request_args+=(--sha "${CI_COMMIT_SHA}")
+  fi
+  podman run --rm \
+    --env GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+    --env CI_COMMIT_SHA="${CI_COMMIT_SHA:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/reconcile.py "${request_args[@]}"
+}
+
+
 function reconcile-clean() {
-  # Clean old OSS objects after all planned builds have been attempted.
+  # Clean old OSS objects and reconcile open failure issues after all planned
+  # builds have been attempted.
   # Each matrix leg removes only its own arch, so amd64/arm64 never overlap. Dry-run
   # mode is always non-destructive; the cron configuration opts into
   # real deletion with CLEANER_DRY_RUN=0.
   local clean_args=(-n "${CLEANER_KEEP_COUNT:-2}" --arch auto)
+  local obsolete_tag_args=()
+  local issue_args=(--arch auto)
   if [ "${RECONCILE_DRY_RUN:-}" = "1" ] || [ "${CLEANER_DRY_RUN:-}" = "1" ]; then
     clean_args+=(--dry-run)
+    issue_args+=(--dry-run)
   else
     clean_args+=(--confirm)
+    obsolete_tag_args+=(--confirm)
   fi
   local generated_retention="${DIST_DIR}/retention-list.generated.txt"
   mkdir -p "${DIST_DIR}"
@@ -151,6 +184,29 @@ function reconcile-clean() {
     python3 scripts/cleaner.py oss-stacks "${clean_args[@]}" \
     --retention-list "${generated_retention}"; then
     echo "reconcile: cleanup failed" >&2
+    return 1
+  fi
+  echo "reconcile: cleaning obsolete stack tags"
+  if ! podman run --rm \
+    --env GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/cleanup_obsolete_tags.py "${obsolete_tag_args[@]}"; then
+    echo "reconcile: obsolete tag cleanup failed" >&2
+    return 1
+  fi
+  echo "reconcile: reconciling open failure issues"
+  if ! podman run --rm \
+    --env GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+    --env OSS_ENDPOINT="${OSS_ENDPOINT:-}" \
+    --env OSS_ACCESS_KEY_ID="${OSS_ACCESS_KEY_ID:-}" \
+    --env OSS_ACCESS_KEY_SECRET="${OSS_ACCESS_KEY_SECRET:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/reconcile.py reconcile-issues "${issue_args[@]}"; then
+    echo "reconcile: issue reconciliation failed" >&2
     return 1
   fi
 }
@@ -183,61 +239,21 @@ function reconcile {
     reconcile-clean
     return $?
   fi
-  local ok=0 failed=0
-  local succeeded_items=() failed_items=()
-  local item item_log build_status
-  local log_dir="" previous_exit_trap=""
-  mkdir -p "${DIST_DIR}"
-  if log_dir=$(mktemp -d "${DIST_DIR}/reconcile-logs.XXXXXX"); then
-    previous_exit_trap=$(trap -p EXIT)
-    trap 'rm -rf "${log_dir}"' EXIT
-  fi
+  local requested=0 failed=0
+  local failed_items=()
+  local item
   while read -r item; do
     [ -n "${item}" ] || continue
-    echo "reconcile: building ${item}"
-    item_log=""
-    if [ -n "${log_dir}" ]; then
-      item_log=$(mktemp "${log_dir}/item.XXXXXX.log") || item_log=""
-    fi
-    build_status=0
-    # Log capture is best-effort and must never change build continuation.
-    # PIPESTATUS records the build, not the tee, result when capture works.
-    set +e
-    if [ -n "${item_log}" ]; then
-      SKIP_CREATE_BUILDPACK_DEP=1 bash "${CURRENT_DIR}/build.sh" all "${item}" \
-        2>&1 | tee "${item_log}"
-      build_status=${PIPESTATUS[0]}
-    else
-      SKIP_CREATE_BUILDPACK_DEP=1 bash "${CURRENT_DIR}/build.sh" all "${item}"
-      build_status=$?
-    fi
-    set -e
-    if [ "${build_status}" -eq 0 ]; then
-      ok=$((ok + 1))
-      succeeded_items+=("${item}")
-      reconcile-report success "${item%@*}" "${item#*@}"
+    echo "reconcile: requesting ${item}"
+    if reconcile-request "${item%@*}" "${item#*@}"; then
+      requested=$((requested + 1))
     else
       failed=$((failed + 1))
       failed_items+=("${item}")
-      echo "reconcile: failed to build ${item}" >&2
-      reconcile-report alert "${item%@*}" "${item#*@}" "${item_log}"
-    fi
-    if [ -n "${item_log}" ]; then
-      rm -f "${item_log}" || true
+      echo "reconcile: failed to request ${item}" >&2
     fi
   done <<< "${plan}"
-  if [ -n "${log_dir}" ]; then
-    rm -rf "${log_dir}" || true
-    trap - EXIT
-    if [ -n "${previous_exit_trap}" ]; then
-      eval "${previous_exit_trap}"
-    fi
-  fi
-  echo "reconcile: done, ok=${ok} failed=${failed}"
-  echo "reconcile: succeeded (${ok}):"
-  for item in "${succeeded_items[@]}"; do
-    echo "  ${item}"
-  done
+  echo "reconcile: done, requested=${requested} failed=${failed}"
   echo "reconcile: failed (${failed}):"
   for item in "${failed_items[@]}"; do
     echo "  ${item}"
@@ -250,7 +266,7 @@ function reconcile {
     cleanup_status=failed
   fi
   if [ "${failed}" -ne 0 ] || [ "${cleanup_status}" != "ok" ]; then
-    echo "reconcile: run failed: ${failed} build failure(s), cleanup=${cleanup_status}" >&2
+    echo "reconcile: run failed: ${failed} request failure(s), cleanup=${cleanup_status}" >&2
     return 1
   fi
   echo "reconcile: run succeeded"
@@ -309,6 +325,113 @@ function all() {
 
   build "${STACK_NAME}" "${STACK_VERSION}"
   upload "${STACK_NAME}"
+}
+
+
+function publish-artifact-exists() {
+  local stack="$1" version="$2" log_file="$3"
+  run_logged "${log_file}" podman run --rm \
+    --env OSS_ENDPOINT="${OSS_ENDPOINT:-}" \
+    --env OSS_ACCESS_KEY_ID="${OSS_ACCESS_KEY_ID:-}" \
+    --env OSS_ACCESS_KEY_SECRET="${OSS_ACCESS_KEY_SECRET:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/storage.py artifact-exists "${stack}" "${version}" \
+    --arch auto --flavour auto
+}
+
+
+function publish-failure() {
+  # Reporting is best-effort. In particular, an alert failure must never skip
+  # the independent request-tag deletion or replace the original build status.
+  local stack="$1" version="$2" log_file="$3"
+  reconcile-report alert "${stack}" "${version}" "${log_file}" || true
+  if ! podman run --rm \
+    --env GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+    -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
+    -w "${CURRENT_DIR}" \
+    "${BUILDPACK_DEP_IMAGE}" \
+    python3 scripts/reconcile.py abandon --stack "${stack}" --version "${version}"; then
+    echo "publish: abandon failed for ${stack}@${version}" >&2
+  fi
+  return 0
+}
+
+
+function publish() {
+  if [ "$#" -gt 1 ]; then
+    echo "Usage: ${FUNCNAME[0]} [STACK@VERSION]" >&2
+    return 2
+  fi
+  local tag stack version log_file status
+  if [ "$#" -eq 1 ]; then
+    tag="$1"
+  else
+    tag="${CI_COMMIT_TAG:-}"
+  fi
+  if [[ ! "${tag}" =~ ^[a-z0-9][a-z0-9_-]*@[^@/[:space:]]+$ ]]; then
+    echo "publish: invalid tag '${tag}', expected STACK@VERSION" >&2
+    return 2
+  fi
+  stack="${tag%%@*}"
+  version="${tag#*@}"
+  if [ ! -d "${CURRENT_DIR}/stacks/${stack}" ]; then
+    echo "publish: unknown stack '${stack}'" >&2
+    return 2
+  fi
+
+  mkdir -p "${DIST_DIR}"
+  log_file=$(mktemp "${DIST_DIR}/publish.XXXXXX.log")
+  if run_logged "${log_file}" create-buildpack-dep; then
+    status=0
+  else
+    status=$?
+    publish-failure "${stack}" "${version}" "${log_file}"
+    rm -f "${log_file}" || true
+    return "${status}"
+  fi
+
+  if publish-artifact-exists "${stack}" "${version}" "${log_file}"; then
+    echo "publish: exact artifact already exists for ${tag}; skipping build"
+    reconcile-report success "${stack}" "${version}"
+    rm -f "${log_file}" || true
+    return 0
+  else
+    status=$?
+  fi
+  if [ "${status}" -ne 1 ]; then
+    echo "publish: artifact preflight failed for ${tag} (status ${status})" >&2
+    publish-failure "${stack}" "${version}" "${log_file}"
+    rm -f "${log_file}" || true
+    return "${status}"
+  fi
+
+  echo "publish: building ${tag}"
+  if run_logged "${log_file}" env SKIP_CREATE_BUILDPACK_DEP=1 \
+    bash "${CURRENT_DIR}/build.sh" all "${tag}"; then
+    status=0
+  else
+    status=$?
+  fi
+  if [ "${status}" -ne 0 ]; then
+    echo "publish: build/upload failed for ${tag} (status ${status})" >&2
+    publish-failure "${stack}" "${version}" "${log_file}"
+    rm -f "${log_file}" || true
+    return "${status}"
+  fi
+
+  if publish-artifact-exists "${stack}" "${version}" "${log_file}"; then
+    reconcile-report success "${stack}" "${version}"
+    rm -f "${log_file}" || true
+    return 0
+  else
+    status=$?
+  fi
+  echo "publish: artifact verification failed for ${tag} (status ${status})" >&2
+  publish-failure "${stack}" "${version}" "${log_file}"
+  rm -f "${log_file}" || true
+  return "${status}"
 }
 
 _is_sourced() {

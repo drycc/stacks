@@ -1,9 +1,13 @@
+import argparse
 import os
+import platform
 import re
 import sys
 import tarfile
 import oss2
 from packaging.version import parse
+
+import checker
 
 
 bucket = oss2.Bucket(
@@ -24,6 +28,34 @@ symlink_table = {
     "ruby": "[0-9]{1,}.[0-9]{1,}",
     "rust": "[0-9]{1,}",
 }
+
+
+def artifact_exists(stack, version, arch, flavour, bucket=None):
+    """Return whether the exact normal (non-symlink) artifact exists."""
+    if bucket is None:
+        bucket = globals()["bucket"]
+    expected = checker.object_key(stack, version, arch, flavour)
+    result = bucket.list_objects(prefix=expected)
+    return any(
+        obj.key == expected and obj.type != "Symlink"
+        for obj in result.object_list
+    )
+
+
+def detect_arch():
+    machine = platform.machine()
+    return {"x86_64": "amd64", "aarch64": "arm64"}.get(machine, machine)
+
+
+def detect_flavour(path="/etc/os-release"):
+    """Derive the flavour the same way stack-utils does (ID-VERSION_ID)."""
+    fields = {}
+    with open(path) as f:
+        for line in f:
+            if "=" in line:
+                key, value = line.strip().split("=", 1)
+                fields[key] = value.strip('"')
+    return "%s-%s" % (fields["ID"], fields["VERSION_ID"])
 
 
 def _find_payload(tar):
@@ -74,12 +106,14 @@ def upload(filename, filepath):
 
 
 def upload_list(stack_name, dist_dir):
+    uploaded = []
     for root, _, files in os.walk(os.path.join(dist_dir, stack_name)):
         for _filename in files:
             if _filename.startswith(stack_name) and _filename.endswith(".tar.gz"):
                 filename = os.path.join("stacks", stack_name, _filename)
                 filepath = os.path.join(root, _filename)
                 upload(filename, filepath)
+                uploaded.append(filename)
                 if stack_name in symlink_table:
                     version_regex = symlink_table[stack_name]
                     prefix = f"stacks/{stack_name}/{stack_name}-"
@@ -88,6 +122,9 @@ def upload_list(stack_name, dist_dir):
                     prefix += symlink_version
                     if filename.startswith(prefix):
                         symlink(stack_name, symlink_version)
+    if not uploaded:
+        raise ValueError("no stack archives found")
+    return uploaded
 
 
 def symlink(stack_name, version):
@@ -124,11 +161,40 @@ def symlink(stack_name, version):
             bucket.put_symlink(obj, symlink)
 
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="storage.py")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    upload_parser = subparsers.add_parser("upload")
+    upload_parser.add_argument("stack")
+    upload_parser.add_argument("dist_dir")
+    symlink_parser = subparsers.add_parser("symlink")
+    symlink_parser.add_argument("stack")
+    symlink_parser.add_argument("version")
+    exists_parser = subparsers.add_parser("artifact-exists")
+    exists_parser.add_argument("stack")
+    exists_parser.add_argument("version")
+    exists_parser.add_argument("--arch", default="auto")
+    exists_parser.add_argument("--flavour", default="auto")
+    args = parser.parse_args(argv)
+
+    if args.command == "upload":
+        upload_list(args.stack, args.dist_dir)
+        return 0
+    if args.command == "symlink":
+        symlink(args.stack, args.version)
+        return 0
+    if args.command == "artifact-exists":
+        try:
+            arch = detect_arch() if args.arch == "auto" else args.arch
+            flavour = detect_flavour() if args.flavour == "auto" else args.flavour
+            exists = artifact_exists(args.stack, args.version, arch, flavour)
+        except Exception as exc:  # noqa: BLE001 - verification errors must not count as missing
+            print("storage: artifact-exists failed: %s" % exc, file=sys.stderr)
+            return 2
+        return 0 if exists else 1
+    return 2
+
+
 if __name__ == "__main__":
-    action = sys.argv[1]
-    if action == "upload":
-        upload_list(sys.argv[2], sys.argv[3])
-    elif action == "symlink":
-        symlink(sys.argv[2], sys.argv[3])
-    else:
-        print("Unknown action: %s" % action)
+    sys.exit(main())

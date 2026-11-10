@@ -86,18 +86,21 @@ function symlink {
 
 
 function reconcile-report() {
-  # Report a per-item build result to GitHub: "alert" creates a
-  # deduplicated issue for a failed build; "success" records the build
-  # (a stack@version tag pointing at the built commit) and closes the
-  # open failure issue. Reporting problems are logged but never change
-  # the reconcile exit status.
+  # Report a per-item build result to GitHub: "alert" creates or comments on
+  # the deduplicated issue for a failed build; "success" records the build
+  # (a stack@version tag pointing at the built commit) and closes the open
+  # failure issue. Reporting problems never change the reconcile exit status.
   local action="${1:?action is required}"
   local stack="${2:?stack is required}"
   local version="${3:?version is required}"
+  local log_file="${4:-}"
   [ -n "${GITHUB_TOKEN:-}" ] || return 0
   local report_args=("${action}" --stack "${stack}" --version "${version}")
   if [ "${action}" = "alert" ]; then
-    report_args+=(--pipeline-url "${CI_PIPELINE_URL:-}")
+    report_args+=(--pipeline-url "${CI_PIPELINE_URL:-}" --sha "${CI_COMMIT_SHA:-}")
+    if [ -n "${log_file}" ]; then
+      report_args+=(--log-file "${log_file}")
+    fi
   fi
   if ! podman run --rm \
     --env GITHUB_TOKEN="${GITHUB_TOKEN}" \
@@ -182,13 +185,34 @@ function reconcile {
   fi
   local ok=0 failed=0
   local succeeded_items=() failed_items=()
-  local item
+  local item item_log build_status
+  local log_dir="" previous_exit_trap=""
+  mkdir -p "${DIST_DIR}"
+  if log_dir=$(mktemp -d "${DIST_DIR}/reconcile-logs.XXXXXX"); then
+    previous_exit_trap=$(trap -p EXIT)
+    trap 'rm -rf "${log_dir}"' EXIT
+  fi
   while read -r item; do
     [ -n "${item}" ] || continue
     echo "reconcile: building ${item}"
-    # A dedicated process per item so set -e keeps its normal semantics
-    # inside build/upload (an if-context would disable it).
-    if SKIP_CREATE_BUILDPACK_DEP=1 bash "${CURRENT_DIR}/build.sh" all "${item}"; then
+    item_log=""
+    if [ -n "${log_dir}" ]; then
+      item_log=$(mktemp "${log_dir}/item.XXXXXX.log") || item_log=""
+    fi
+    build_status=0
+    # Log capture is best-effort and must never change build continuation.
+    # PIPESTATUS records the build, not the tee, result when capture works.
+    set +e
+    if [ -n "${item_log}" ]; then
+      SKIP_CREATE_BUILDPACK_DEP=1 bash "${CURRENT_DIR}/build.sh" all "${item}" \
+        2>&1 | tee "${item_log}"
+      build_status=${PIPESTATUS[0]}
+    else
+      SKIP_CREATE_BUILDPACK_DEP=1 bash "${CURRENT_DIR}/build.sh" all "${item}"
+      build_status=$?
+    fi
+    set -e
+    if [ "${build_status}" -eq 0 ]; then
       ok=$((ok + 1))
       succeeded_items+=("${item}")
       reconcile-report success "${item%@*}" "${item#*@}"
@@ -196,9 +220,19 @@ function reconcile {
       failed=$((failed + 1))
       failed_items+=("${item}")
       echo "reconcile: failed to build ${item}" >&2
-      reconcile-report alert "${item%@*}" "${item#*@}"
+      reconcile-report alert "${item%@*}" "${item#*@}" "${item_log}"
+    fi
+    if [ -n "${item_log}" ]; then
+      rm -f "${item_log}" || true
     fi
   done <<< "${plan}"
+  if [ -n "${log_dir}" ]; then
+    rm -rf "${log_dir}" || true
+    trap - EXIT
+    if [ -n "${previous_exit_trap}" ]; then
+      eval "${previous_exit_trap}"
+    fi
+  fi
   echo "reconcile: done, ok=${ok} failed=${failed}"
   echo "reconcile: succeeded (${ok}):"
   for item in "${succeeded_items[@]}"; do

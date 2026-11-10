@@ -16,18 +16,19 @@ backfilled, while a new release in an older maintained series can still
 be built alongside a newer series. Missing versions inside an effective
 window are still built, subject to the per-run caps.
 
-The alert subcommand tracks a failed build as a deduplicated GitHub issue
-(creating one only while none is open). The success subcommand records a
-successful build - a stack@version tag pointing at the commit that built
-it, purely as a human-readable history since the nightly cron is the only
-build path - and closes the open failure issue. Tags record builds; they
-never trigger them.
+The alert subcommand tracks a failed build as a deduplicated GitHub issue,
+appending later failures for the same item as comments with bounded build-log
+excerpts. The success subcommand records a successful build - a stack@version
+tag pointing at the commit that built it, purely as a human-readable history
+since the nightly cron is the only build path - and closes the open failure
+issue. Tags record builds; they never trigger them.
 
 Usage:
     python3 scripts/reconcile.py plan [--arch ARCH] [--flavour FLAVOUR]
         [--max-per-stack N] [--max-total N] [--retention N] [--stack NAME]
     python3 scripts/reconcile.py alert --stack NAME --version VERSION
-        [--pipeline-url URL] [--arch ARCH] [--flavour FLAVOUR]
+        [--pipeline-url URL] [--log-file PATH] [--sha SHA]
+        [--arch ARCH] [--flavour FLAVOUR]
     python3 scripts/reconcile.py success --stack NAME --version VERSION
         [--sha SHA] [--arch ARCH] [--flavour FLAVOUR]
 """
@@ -35,8 +36,10 @@ Usage:
 import argparse
 import os
 import platform
+import re
 import subprocess
 import sys
+from collections import deque
 
 import checker
 import requests
@@ -262,7 +265,7 @@ def find_open_failure_issues(title, session, headers):
     found = {
         issue["number"]: issue
         for issue in response.json().get("items", [])
-        if "pull_request" not in issue
+        if "pull_request" not in issue and issue.get("title") == title
     }
     listing = session.get(
         "https://api.github.com/repos/drycc/stacks/issues",
@@ -281,7 +284,42 @@ def find_open_failure_issues(title, session, headers):
     return sorted(found.values(), key=lambda issue: issue["number"])
 
 
-def _failure_body(stack, version, arch, flavour, pipeline_url):
+FAILURE_LOG_MAX_LINES = 200
+FAILURE_LOG_MAX_CHARS = 48000
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _failure_log_excerpt(log_file):
+    """Read a bounded, terminal-formatting-free excerpt for a GitHub body."""
+    if not log_file:
+        return None
+    lines = deque(maxlen=FAILURE_LOG_MAX_LINES)
+    truncated = False
+    try:
+        with open(log_file, encoding="utf-8", errors="replace") as source:
+            while True:
+                # Bound each read as well as the retained line count: compiler
+                # output can be arbitrarily large or contain very long lines.
+                line = source.readline(FAILURE_LOG_MAX_CHARS + 1)
+                if not line:
+                    break
+                truncated = truncated or len(lines) == lines.maxlen
+                lines.append(line)
+    except OSError as exc:
+        print("reconcile: alert: cannot read build log %s: %s" % (log_file, exc),
+              file=sys.stderr)
+        return None
+    excerpt = ANSI_ESCAPE.sub("", "".join(lines))
+    if len(excerpt) > FAILURE_LOG_MAX_CHARS:
+        truncated = True
+        excerpt = excerpt[-FAILURE_LOG_MAX_CHARS:]
+    if truncated:
+        excerpt = "[... earlier build log omitted ...]\n" + excerpt
+    return excerpt or None
+
+
+def _failure_body(stack, version, arch, flavour, pipeline_url, sha=None,
+                  log_excerpt=None):
     lines = [
         "The nightly reconcile run failed to build this item.",
         "",
@@ -289,6 +327,8 @@ def _failure_body(stack, version, arch, flavour, pipeline_url):
         "- version: %s" % version,
         "- arch/flavour: %s/%s" % (arch, flavour),
     ]
+    if sha:
+        lines.append("- commit: %s" % sha)
     if pipeline_url:
         lines.append("- pipeline: %s" % pipeline_url)
     lines += [
@@ -297,15 +337,24 @@ def _failure_body(stack, version, arch, flavour, pipeline_url):
         " this failure will repeat until the underlying error is fixed."
         " This issue closes automatically once the build succeeds.",
     ]
+    if log_excerpt:
+        lines += [
+            "",
+            "## Build log excerpt",
+            "",
+            "```text",
+            log_excerpt,
+            "```",
+        ]
     return "\n".join(lines)
 
 
 def alert_failure(stack, version, arch=None, flavour=None, pipeline_url=None,
-                  session=None):
-    """Create the failure issue for stack@version, deduplicated by title.
+                  log_file=None, sha=None, session=None):
+    """Create or comment on the issue for stack@version, deduplicated by title.
 
-    Returns the new issue number, or None when an issue is already open or
-    no GITHUB_TOKEN is available (both are silent skips, not errors).
+    Returns the new issue number, or None when an existing issue was updated
+    or no GITHUB_TOKEN is available.
     """
     headers = _github_headers()
     if headers is None:
@@ -315,16 +364,31 @@ def alert_failure(stack, version, arch=None, flavour=None, pipeline_url=None,
         session = requests
     arch = arch or detect_arch()
     flavour = flavour or detect_flavour()
+    sha = sha or os.environ.get("CI_COMMIT_SHA")
     title = failure_issue_title(stack, version, arch, flavour)
-    if find_open_failure_issues(title, session, headers):
-        print("reconcile: alert: an issue is already open for %s" % title, file=sys.stderr)
+    body = _failure_body(
+        stack, version, arch, flavour, pipeline_url, sha=sha,
+        log_excerpt=_failure_log_excerpt(log_file),
+    )
+    issues = find_open_failure_issues(title, session, headers)
+    if issues:
+        for issue in issues:
+            response = session.post(
+                "https://api.github.com/repos/drycc/stacks/issues/%d/comments"
+                % issue["number"],
+                json={"body": body},
+                headers=headers,
+            )
+            response.raise_for_status()
+        print(
+            "reconcile: alert: commented on issue(s) %s (%s)"
+            % (", ".join("#%d" % issue["number"] for issue in issues), title),
+            file=sys.stderr,
+        )
         return None
     response = session.post(
         "https://api.github.com/repos/drycc/stacks/issues",
-        json={
-            "title": title,
-            "body": _failure_body(stack, version, arch, flavour, pipeline_url),
-        },
+        json={"title": title, "body": body},
         headers=headers,
     )
     response.raise_for_status()
@@ -424,7 +488,7 @@ def cmd_alert(args):
         alert_failure(
             args.stack, args.version,
             arch=args.arch, flavour=args.flavour,
-            pipeline_url=args.pipeline_url,
+            pipeline_url=args.pipeline_url, log_file=args.log_file, sha=args.sha,
         )
     except Exception as exc:  # noqa: BLE001 - reporting must not mask failures
         print("reconcile: alert failed: %s" % exc, file=sys.stderr)
@@ -484,12 +548,18 @@ def main(argv=None):
         help="limit planning to this stack (repeatable)",
     )
     alert_parser = subparsers.add_parser(
-        "alert", help="create a deduplicated issue for a failed build"
+        "alert", help="create or comment on the deduplicated issue for a failed build"
     )
     alert_parser.add_argument("--stack", required=True)
     alert_parser.add_argument("--version", required=True)
     alert_parser.add_argument(
         "--pipeline-url", default=None, help="link to the failing pipeline"
+    )
+    alert_parser.add_argument(
+        "--log-file", default=None, help="build log to excerpt into the issue or comment"
+    )
+    alert_parser.add_argument(
+        "--sha", default=None, help="failing commit (default: CI_COMMIT_SHA)"
     )
     alert_parser.add_argument("--arch", default=None, help="default: detected")
     alert_parser.add_argument("--flavour", default=None, help="default: detected")

@@ -50,6 +50,18 @@ case " $* " in
     ;;
   *"reconcile.py alert"*)
     echo "$*" >> "${RECONCILE_TEST_STATE}/alerts"
+    log_file=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--log-file" ] && [ "$#" -ge 2 ]; then
+        log_file="$2"
+        shift 2
+        continue
+      fi
+      shift
+    done
+    if [ -n "${log_file}" ] && [ -f "${log_file}" ]; then
+      cat "${log_file}" >> "${RECONCILE_TEST_STATE}/alert-logs"
+    fi
     exit 0
     ;;
   *"reconcile.py success"*)
@@ -107,6 +119,14 @@ run_reconcile() {
   mkdir -p "${root}/state"
   printf '%s' "${plan_content}" > "${root}/plan"
   make_fake_podman "${root}"
+  if [ "${RECONCILE_TEST_MKTEMP_FAIL:-0}" = "1" ]; then
+    cat > "${root}/bin/mktemp" <<'EOF'
+#!/usr/bin/env bash
+echo "simulated mktemp failure" >&2
+exit 1
+EOF
+    chmod +x "${root}/bin/mktemp"
+  fi
   local rc=0
   (
     export CODENAME=debian-13
@@ -130,7 +150,8 @@ run_reconcile() {
     # shellcheck source=/dev/null
     . "${REPO}/build.sh"
     reconcile "$@"
-  ) > "${root}/out.log" 2>&1 || rc=$?
+  ) > "${root}/out.log" 2>&1
+  rc=$?
   local builds uploads image_builds
   builds="$(cat "${root}/state/builds" 2> /dev/null | paste -sd, -)"
   uploads="$(grep -c . "${root}/state/uploads" 2> /dev/null || echo 0)"
@@ -197,15 +218,16 @@ test_reconcile_builds_each_planned_item_and_reuses_the_image() {
 
 test_reconcile_failure_still_cleans_reports_lists_and_exits_non_zero() {
   local out problems=""
-  out="$(run_reconcile "$(mktemp -d)" $'nginx@1.31.8\nbadstack@9.9.9\n' '9.9.9' '')"
+  out="$(run_reconcile "$(mktemp -d)" $'nginx@1.31.8\nbadstack@9.9.9\nrustfs@1.0.4\n' '9.9.9' '')"
   parse_result "${out}"
   [ "${RESULT_RC}" -ne 0 ] || problems="${problems} exit=0"
   [ "${RESULT_IMAGE_BUILDS}" -eq 1 ] || problems="${problems} image_builds=${RESULT_IMAGE_BUILDS}"
-  [ "${RESULT_BUILDS}" = "nginx@1.31.8,badstack@9.9.9" ] || problems="${problems} builds=[${RESULT_BUILDS}]"
-  [ "${RESULT_UPLOADS}" -eq 1 ] || problems="${problems} uploads=${RESULT_UPLOADS}"
-  grep -q "ok=1 failed=1" "${RESULT_ROOT}/out.log" || problems="${problems} summary-missing"
-  grep -q '^reconcile: succeeded (1):$' "${RESULT_ROOT}/out.log" || problems="${problems} succeeded-list-missing"
+  [ "${RESULT_BUILDS}" = "nginx@1.31.8,badstack@9.9.9,rustfs@1.0.4" ] || problems="${problems} builds=[${RESULT_BUILDS}]"
+  [ "${RESULT_UPLOADS}" -eq 2 ] || problems="${problems} uploads=${RESULT_UPLOADS}"
+  grep -q "ok=2 failed=1" "${RESULT_ROOT}/out.log" || problems="${problems} summary-missing"
+  grep -q '^reconcile: succeeded (2):$' "${RESULT_ROOT}/out.log" || problems="${problems} succeeded-list-missing"
   grep -q '^  nginx@1.31.8$' "${RESULT_ROOT}/out.log" || problems="${problems} succeeded-nginx-missing"
+  grep -q '^  rustfs@1.0.4$' "${RESULT_ROOT}/out.log" || problems="${problems} succeeded-rustfs-missing"
   grep -q '^reconcile: failed (1):$' "${RESULT_ROOT}/out.log" || problems="${problems} failed-list-missing"
   grep -q '^  badstack@9.9.9$' "${RESULT_ROOT}/out.log" || problems="${problems} failed-badstack-missing"
   grep -q '^reconcile: run failed: 1 build failure(s), cleanup=ok$' "${RESULT_ROOT}/out.log" \
@@ -214,16 +236,54 @@ test_reconcile_failure_still_cleans_reports_lists_and_exits_non_zero() {
     || problems="${problems} alerts=$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")"
   grep -q -- "--stack badstack --version 9.9.9" "${RESULT_ROOT}/state/alerts" 2> /dev/null \
     || problems="${problems} alert-badstack-missing"
-  [ "$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")" -eq 1 ] \
+  grep -q -- "--log-file " "${RESULT_ROOT}/state/alerts" 2> /dev/null \
+    || problems="${problems} alert-log-file-missing"
+  grep -q -- "--sha 1111111111111111111111111111111111111111" \
+    "${RESULT_ROOT}/state/alerts" 2> /dev/null || problems="${problems} alert-sha-missing"
+  grep -q "simulated build failure for badstack@9.9.9" \
+    "${RESULT_ROOT}/state/alert-logs" 2> /dev/null || problems="${problems} alert-log-content-missing"
+  grep -q "simulated build failure for badstack@9.9.9" "${RESULT_ROOT}/out.log" \
+    || problems="${problems} live-build-log-missing"
+  [ "$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")" -eq 2 ] \
     || problems="${problems} successes=$(count_calls "${RESULT_ROOT}/state/successes" "reconcile.py success")"
   [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
     || problems="${problems} cleaner-not-called-after-failure"
+  if find "${REPO}/_dist" -maxdepth 1 \
+    \( -name 'reconcile-item.*' -o -name 'reconcile-logs.*' \) -print -quit | grep -q .; then
+    problems="${problems} temporary-build-logs-left-behind"
+  fi
   if [ -z "${problems}" ]; then
     report "reconcile failure still cleans, reports lists, and exits non-zero" 0
     rm -rf "${RESULT_ROOT}"
   else
     show_log_on_failure "${problems}" || true
     report "reconcile failure still cleans, reports lists, and exits non-zero" 1
+  fi
+}
+
+test_reconcile_log_setup_failure_does_not_change_build_flow() {
+  local out problems=""
+  out="$(RECONCILE_TEST_MKTEMP_FAIL=1 run_reconcile "$(mktemp -d)" $'badstack@9.9.9\nnginx@1.31.8\n' '9.9.9' '')"
+  parse_result "${out}"
+  [ "${RESULT_RC}" -ne 0 ] || problems="${problems} exit=0"
+  [ "${RESULT_BUILDS}" = "badstack@9.9.9,nginx@1.31.8" ] || problems="${problems} builds=[${RESULT_BUILDS}]"
+  [ "${RESULT_UPLOADS}" -eq 1 ] || problems="${problems} uploads=${RESULT_UPLOADS}"
+  grep -q "ok=1 failed=1" "${RESULT_ROOT}/out.log" || problems="${problems} summary-missing"
+  grep -q "simulated build failure for badstack@9.9.9" "${RESULT_ROOT}/out.log" \
+    || problems="${problems} live-build-log-missing"
+  [ "$(count_calls "${RESULT_ROOT}/state/alerts" "reconcile.py alert")" -eq 1 ] \
+    || problems="${problems} alert-not-created"
+  if grep -q -- "--log-file " "${RESULT_ROOT}/state/alerts" 2> /dev/null; then
+    problems="${problems} unexpected-log-file-argument"
+  fi
+  [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
+    || problems="${problems} cleaner-not-called-after-log-setup-failure"
+  if [ -z "${problems}" ]; then
+    report "reconcile log setup failure does not change build flow" 0
+    rm -rf "${RESULT_ROOT}"
+  else
+    show_log_on_failure "${problems}" || true
+    report "reconcile log setup failure does not change build flow" 1
   fi
 }
 
@@ -391,6 +451,7 @@ main() {
   test_reconcile_with_empty_plan_builds_nothing
   test_reconcile_dry_run_prints_the_plan_without_building
   test_reconcile_forwards_planner_arguments
+  test_reconcile_log_setup_failure_does_not_change_build_flow
   test_reconcile_without_github_token_skips_reporting
   test_retention_generation_failure_skips_cleaner
   test_reconcile_cleaner_failure_fails_the_run

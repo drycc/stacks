@@ -424,18 +424,6 @@ repo_info_table = {
         "owner": "victoriametrics",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
-    "headscale": {
-        "name": "headscale",
-        "type": "github",
-        "owner": "juanfont",
-        "match": "v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
-    "tailscale": {
-        "name": "tailscale",
-        "type": "github",
-        "owner": "tailscale",
-        "match": "v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
-    },
 }
 
 

@@ -16,7 +16,7 @@ function build() {
   # build kvrocks
   curl -sSL https://github.com/apache/kvrocks/archive/refs/tags/v${STACK_VERSION}.tar.gz | tar xvz
   cd kvrocks-${STACK_VERSION}
-  apt install -y git build-essential cmake libtool python3 libssl-dev
+  install-packages git build-essential cmake libtool python3 libssl-dev
   ./x.py build -DENABLE_OPENSSL=ON -DPORTABLE=1 -DCMAKE_BUILD_TYPE=Release; cd ..
   # build kvrocks controller
   install-stack go "${GO_VERSION}" && . init-stack

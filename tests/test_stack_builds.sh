@@ -62,8 +62,51 @@ test_mysql_installs_webauthn_build_dependency() {
   rm -rf "${root}"
 }
 
+test_kvrocks_installs_dependencies_with_stack_helper() {
+  local root rc
+  root="$(mktemp -d)"
+  CASE_ROOT="${root}"
+  DATA_DIR="${root}/data"
+  STACK_VERSION="2.17.0"
+  (
+    function . {
+      if [ "${1:-}" = "/usr/bin/stack-utils" ]; then
+        :
+      else
+        builtin . "$@"
+      fi
+    }
+    build-stack() { build "$@"; }
+    generate-stack-path() { :; }
+    dpkg() { printf 'amd64\n'; }
+    curl() { :; }
+    tar() { :; }
+    cd() { :; }
+    apt() {
+      # Never let the regression test invoke the host package manager.
+      exit 100
+    }
+    install-packages() {
+      printf 'install-packages %s\n' "$*" >> "${CASE_ROOT}/commands"
+      # Stop at the package-manager boundary; later build steps are irrelevant.
+      exit 0
+    }
+    . "${SCRIPT_DIR}/stacks/kvrocks/build.sh" "${CASE_ROOT}/dist"
+  ) > "${root}/out.log" 2>&1
+  rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "  kvrocks did not use install-packages for its build dependencies" >&2
+  elif ! grep -Fqx 'install-packages git build-essential cmake libtool python3 libssl-dev' "${root}/commands"; then
+    echo "  kvrocks passed an unexpected dependency set to install-packages" >&2
+    rc=1
+  fi
+  report "kvrocks installs build dependencies through the stack helper" "${rc}"
+  rm -rf "${root}"
+}
+
 main() {
   test_mysql_installs_webauthn_build_dependency
+  test_kvrocks_installs_dependencies_with_stack_helper
 
   echo
   echo "${passed} passed, ${failed} failed"

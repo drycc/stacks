@@ -183,6 +183,10 @@ repo_info_table = {
         "type": "github",
         "owner": "postgres",
         "match": "^REL_[0-9]{1,}_[0-9]{1,}$",
+        "source_url": (
+            "https://ftp.postgresql.org/pub/source/v{version}/"
+            "postgresql-{version}.tar.gz"
+        ),
     },
     "python": {
         "name": "cpython",
@@ -565,6 +569,16 @@ def _github_candidates(stack, info, session):
         if version in seen:
             continue
         seen.add(version)
+        source_url = info.get("source_url")
+        if source_url:
+            source_response = session.head(
+                source_url.format(version=version),
+                allow_redirects=True,
+                timeout=30,
+            )
+            if source_response.status_code == 404:
+                continue
+            source_response.raise_for_status()
         candidates.append({
             "stack": stack,
             "version": version,

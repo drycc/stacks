@@ -47,21 +47,27 @@ DEFAULT_EDGES = [
 
 
 class FakeResponse:
-    def __init__(self, payload=None, text=""):
+    def __init__(self, payload=None, text="", status_code=200):
         self._payload = payload
         self.text = text
+        self.status_code = status_code
 
     def json(self):
         return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError("HTTP %d" % self.status_code)
 
 
 class FakeSession:
     """Serves canned responses per URL and records every request."""
 
-    def __init__(self, gets=None, posts=None):
+    def __init__(self, gets=None, posts=None, heads=None):
         self.requests = []
         self._gets = gets or {}
         self._posts = posts or {}
+        self._heads = heads or {}
 
     def get(self, url, **kwargs):
         self.requests.append(("GET", url))
@@ -70,6 +76,10 @@ class FakeSession:
     def post(self, url, **kwargs):
         self.requests.append(("POST", url))
         return FakeResponse(**self._posts[url])
+
+    def head(self, url, **kwargs):
+        self.requests.append(("HEAD", url))
+        return FakeResponse(**self._heads[url])
 
 
 class StrictRequests:
@@ -84,15 +94,19 @@ class StrictRequests:
     def post(self, url, **kwargs):
         self._fail("post", url)
 
+    def head(self, url, **kwargs):
+        self._fail("head", url)
+
 
 def graphql_response(edges):
     return {"payload": {"data": {"repository": {"refs": {"edges": edges}}}}}
 
 
-def github_session(edges=DEFAULT_EDGES):
+def github_session(edges=DEFAULT_EDGES, heads=None):
     return FakeSession(
         gets={COMMIT_URL: {"payload": {"commit": {"author": {"date": "2026-11-02T12:00:00Z"}}}}},
         posts={"https://api.github.com/graphql": graphql_response(edges)},
+        heads=heads,
     )
 
 
@@ -175,6 +189,55 @@ class GithubDiscoveryTest(unittest.TestCase):
         self.assertTrue(urls)
         for url in urls:
             self.assertNotIn("drycc/stacks", url)
+
+
+class PostgresqlDiscoveryTest(unittest.TestCase):
+    EDGES = [
+        edge("REL_18_7", "a7", "2026-11-09T20:09:29Z"),
+        edge("REL_18_6", "a6", "2026-11-08T20:09:29Z"),
+    ]
+    SOURCE_18_7 = (
+        "https://ftp.postgresql.org/pub/source/v18.7/postgresql-18.7.tar.gz"
+    )
+    SOURCE_18_6 = (
+        "https://ftp.postgresql.org/pub/source/v18.6/postgresql-18.6.tar.gz"
+    )
+
+    def setUp(self):
+        self._orig_requests = checker.requests
+        checker.requests = StrictRequests()
+
+    def tearDown(self):
+        checker.requests = self._orig_requests
+
+    def test_skips_git_tag_until_official_source_is_published(self):
+        session = github_session(
+            self.EDGES,
+            heads={
+                self.SOURCE_18_7: {"status_code": 404},
+                self.SOURCE_18_6: {"status_code": 200},
+            },
+        )
+        candidates = checker.discover_candidates("postgresql", session=session)
+        self.assertEqual(
+            candidates,
+            [
+                {
+                    "stack": "postgresql",
+                    "version": "18.6",
+                    "upstream": "REL_18_6",
+                    "date": datetime(2026, 11, 8, 20, 9, 29, tzinfo=timezone.utc),
+                },
+            ],
+        )
+
+    def test_source_server_errors_abort_discovery(self):
+        session = github_session(
+            self.EDGES,
+            heads={self.SOURCE_18_7: {"status_code": 500}},
+        )
+        with self.assertRaisesRegex(RuntimeError, "HTTP 500"):
+            checker.discover_candidates("postgresql", session=session)
 
 
 class UrlDiscoveryTest(unittest.TestCase):

@@ -24,9 +24,10 @@ API_ROOT = "https://api.github.com/repos/drycc/stacks"
 
 
 class FakeResponse:
-    def __init__(self, payload, status_code=200):
+    def __init__(self, payload, status_code=200, links=None):
         self.payload = payload
         self.status_code = status_code
+        self.links = links or {}
 
     def json(self):
         return self.payload
@@ -39,13 +40,14 @@ class FakeResponse:
 class FakeGithubSession:
     """Stateful in-memory GitHub refs endpoint with strict request checks."""
 
-    def __init__(self, refs=(), delete_statuses=None, keep_on_delete=()):
+    def __init__(self, refs=(), delete_statuses=None, keep_on_delete=(), paginate=True):
         self.refs = list(refs)
         self.delete_statuses = dict(delete_statuses or {})
         self.keep_on_delete = set(keep_on_delete)
         self.calls = []
         self.list_status = 200
         self.fail_verification = False
+        self.paginate = paginate
 
     @staticmethod
     def _check_timeout(timeout):
@@ -63,10 +65,18 @@ class FakeGithubSession:
             return FakeResponse({"message": "list failed"}, status)
         if params is None or params.get("per_page") != 100 or params.get("page") is None:
             raise AssertionError("tag listing must use numbered 100-item pages")
+        if not self.paginate:
+            if list_count > 1:
+                raise AssertionError("an unpaginated response must not be requested again")
+            return FakeResponse([{"ref": ref} for ref in self.refs])
         page = params["page"]
         start = (page - 1) * 100
-        payload = [{"ref": ref} for ref in self.refs[start:start + 100]]
-        return FakeResponse(payload)
+        end = start + 100
+        payload = [{"ref": ref} for ref in self.refs[start:end]]
+        links = {}
+        if end < len(self.refs):
+            links["next"] = {"url": API_ROOT + "/git/refs/tags?page=%d" % (page + 1)}
+        return FakeResponse(payload, links=links)
 
     def delete(self, url, headers=None, timeout=None):
         self._check_timeout(timeout)
@@ -132,6 +142,14 @@ class TagListingTest(unittest.TestCase):
         self.assertEqual([call[2]["page"] for call in gets], [1, 2])
         self.assertTrue(all(call[2]["per_page"] == 100 for call in gets))
         self.assertTrue(all(call[4] == 30 for call in gets))
+
+    def test_unpaginated_full_response_without_next_link_is_not_repeated(self):
+        refs = ["refs/tags/current@%03d" % number for number in range(101)]
+        session = FakeGithubSession(refs, paginate=False)
+
+        self.assertEqual(cleanup_obsolete_tags.list_tag_refs(session, {}), refs)
+        gets = [call for call in session.calls if call[0] == "GET"]
+        self.assertEqual(len(gets), 1)
 
 
 class CleanupCliTest(unittest.TestCase):

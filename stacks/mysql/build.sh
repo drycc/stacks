@@ -3,6 +3,16 @@
 # Load stack utils
 . /usr/bin/stack-utils
 
+# Strip installed ELF programs; optional utilities vary by MySQL release.
+function strip-mysql-binaries() {
+  local bin_dir="${1:?bin dir is required}" binary
+  for binary in "${bin_dir}"/*; do
+    if [ -f "${binary}" ] && file --brief "${binary}" | grep -q '^ELF '; then
+      strip "${binary}" || return
+    fi
+  done
+}
+
 # Implement build function
 function build() {
   generate-stack-path
@@ -46,37 +56,7 @@ function build() {
   make  --jobs=$numcpu
   make  install --jobs=$numcpu
   make  clean
-  strip  /opt/drycc/mysql/bin/comp_err
-  strip  /opt/drycc/mysql/bin/ibd2sdi
-  strip  /opt/drycc/mysql/bin/innochecksum
-  strip  /opt/drycc/mysql/bin/lz4_decompress
-  strip  /opt/drycc/mysql/bin/my_print_defaults
-  strip  /opt/drycc/mysql/bin/myisam_ftdump
-  strip  /opt/drycc/mysql/bin/myisamchk
-  strip  /opt/drycc/mysql/bin/myisamlog
-  strip  /opt/drycc/mysql/bin/myisampack
-  strip  /opt/drycc/mysql/bin/mysql
-  strip  /opt/drycc/mysql/bin/mysql_config_editor
-  strip  /opt/drycc/mysql/bin/mysql_migrate_keyring
-  strip  /opt/drycc/mysql/bin/mysql_secure_installation
-  strip  /opt/drycc/mysql/bin/mysql_ssl_rsa_setup
-  strip  /opt/drycc/mysql/bin/mysql_tzinfo_to_sql
-  strip  /opt/drycc/mysql/bin/mysql_upgrade
-  strip  /opt/drycc/mysql/bin/mysqladmin
-  strip  /opt/drycc/mysql/bin/mysqlbinlog
-  strip  /opt/drycc/mysql/bin/mysqlcheck
-  strip  /opt/drycc/mysql/bin/mysqld
-  strip  /opt/drycc/mysql/bin/mysqldump
-  strip  /opt/drycc/mysql/bin/mysqlimport
-  strip  /opt/drycc/mysql/bin/mysqlpump
-  strip  /opt/drycc/mysql/bin/mysqlrouter
-  strip  /opt/drycc/mysql/bin/mysqlrouter_keyring
-  strip  /opt/drycc/mysql/bin/mysqlrouter_passwd
-  strip  /opt/drycc/mysql/bin/mysqlrouter_plugin_info
-  strip  /opt/drycc/mysql/bin/mysqlshow
-  strip  /opt/drycc/mysql/bin/mysqlslap
-  strip  /opt/drycc/mysql/bin/perror
-  strip  /opt/drycc/mysql/bin/zlib_decompress
+  strip-mysql-binaries /opt/drycc/mysql/bin
 
   # remove mysql test dir
   rm -rf /opt/drycc/mysql/mysql-test

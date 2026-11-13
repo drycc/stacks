@@ -60,7 +60,7 @@ def github_headers(token):
 
 
 def list_tag_refs(session, headers):
-    """List every tag ref using numbered GitHub pagination and bounded I/O."""
+    """List every tag ref, stopping when GitHub provides no next page."""
     refs = []
     page = 1
     while True:
@@ -78,7 +78,7 @@ def list_tag_refs(session, headers):
             if not isinstance(item, dict) or not isinstance(item.get("ref"), str):
                 raise CleanupError("GitHub tag listing contained an invalid ref")
             refs.append(item["ref"])
-        if len(payload) < PAGE_SIZE:
+        if not response.links.get("next"):
             return refs
         page += 1
 

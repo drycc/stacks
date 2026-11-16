@@ -45,7 +45,6 @@ function build() {
   mv clickhouse-keeper-$LATEST_VERSION/usr/bin/* ${BIN_DIR}/
 
   ls -l ${BIN_DIR}/
-  ls -l /workspace/clickhouse-24.3.2.23-linux-amd64-debian-12/
 
   rm clickhouse-server* -rf
   rm clickhouse-common-static* -rf

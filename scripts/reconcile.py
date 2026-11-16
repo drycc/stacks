@@ -683,7 +683,10 @@ def delete_build_tag(stack, version, session=None):
         headers=headers,
         timeout=30,
     )
-    if response.status_code == 404:
+    if response.status_code == 404 or (
+        response.status_code == 422
+        and response.json().get("message") == "Reference does not exist"
+    ):
         print("reconcile: abandon: refs/%s already absent" % ref, file=sys.stderr)
         return True
     response.raise_for_status()

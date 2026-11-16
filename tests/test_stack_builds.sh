@@ -221,12 +221,144 @@ test_mongodb_exporter_builds_from_source() {
   rm -rf "${root}"
 }
 
+test_mongodb6_amd64_uses_published_ubuntu_archive() {
+  local root rc
+  root="$(mktemp -d)"
+  CASE_ROOT="${root}"
+  DATA_DIR="${root}/data"
+  OS_ARCH="amd64"
+  STACK_VERSION="6.0.30"
+  mkdir -p "${root}/fixture/mongodb-linux-x86_64-ubuntu2204-6.0.30/bin" "${root}/work"
+  printf 'test-mongod\n' > "${root}/fixture/mongodb-linux-x86_64-ubuntu2204-6.0.30/bin/mongod"
+  tar -czf "${root}/mongodb.tgz" -C "${root}/fixture" mongodb-linux-x86_64-ubuntu2204-6.0.30
+  (
+    set -e
+    cd "${root}/work"
+    function . {
+      if [ "${1:-}" = "/usr/bin/stack-utils" ]; then
+        :
+      else
+        builtin . "$@"
+      fi
+    }
+    build-stack() { build "$@"; }
+    generate-stack-path() { :; }
+    curl() {
+      case "$*" in
+        *debian12*)
+          printf 'Forbidden\n'
+          return 22
+          ;;
+        *ubuntu2204*)
+          cat "${CASE_ROOT}/mongodb.tgz"
+          ;;
+        *)
+          return 2
+          ;;
+      esac
+    }
+    . "${SCRIPT_DIR}/stacks/mongodb/build.sh" "${root}/dist"
+  ) > "${root}/out.log" 2>&1
+  rc=$?
+  if [ "${rc}" -ne 0 ] || [ ! -f "${root}/data/bin/mongod" ]; then
+    echo "  mongodb 6 amd64 did not use the published Ubuntu 22.04 archive" >&2
+    cat "${root}/out.log" >&2
+    rc=1
+  elif [ "$(cat "${root}/data/bin/mongod")" != "test-mongod" ]; then
+    echo "  mongodb 6 amd64 installed unexpected archive contents" >&2
+    rc=1
+  fi
+  report "mongodb 6 amd64 uses the published Ubuntu archive" "${rc}"
+  rm -rf "${root}"
+}
+
+test_pack_build_keeps_tagged_go_dependencies() {
+  local root rc
+  root="$(mktemp -d)"
+  CASE_ROOT="${root}"
+  DATA_DIR="${root}/data"
+  STACK_NAME="pack"
+  STACK_VERSION="0.40.11"
+  GO_VERSION="1.26.11"
+  (
+    set -e
+    function . {
+      case "${1:-}" in
+        /usr/bin/stack-utils|init-stack) : ;;
+        *) builtin . "$@" ;;
+      esac
+    }
+    build-stack() { build "$@"; }
+    generate-stack-path() { :; }
+    install-stack() { :; }
+    curl() { :; }
+    tar() { :; }
+    cd() { :; }
+    rm() { :; }
+    go() {
+      if [ "${1:-}" = "get" ] && [ "${2:-}" = "-u" ]; then
+        echo "go: github.com/buildpacks/lifecycle@v0.21.29 requires go >= 1.27.4" >&2
+        return 1
+      fi
+      if [ "${1:-}" = "mod" ] && [ "${2:-}" = "vendor" ]; then
+        touch "${CASE_ROOT}/vendored"
+      fi
+      if [ "${1:-}" = "build" ] && [ ! -f "${CASE_ROOT}/vendored" ]; then
+        echo "go: tagged dependencies were not vendored" >&2
+        return 1
+      fi
+    }
+    . "${SCRIPT_DIR}/stacks/pack/build.sh" "${root}/dist"
+  ) > "${root}/out.log" 2>&1
+  rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "  pack build upgrades beyond its tagged Go toolchain" >&2
+    cat "${root}/out.log" >&2
+  fi
+  report "pack builds with its tagged Go dependencies" "${rc}"
+  rm -rf "${root}"
+}
+
+test_clickhouse_build_has_no_stale_workspace_lookup() {
+  local root rc
+  root="$(mktemp -d)"
+  DATA_DIR="${root}/data"
+  STACK_VERSION="26.3.64.3"
+  (
+    set -e
+    function . {
+      if [ "${1:-}" = "/usr/bin/stack-utils" ]; then
+        :
+      else
+        builtin . "$@"
+      fi
+    }
+    build-stack() { build "$@"; }
+    generate-stack-path() { :; }
+    curl() { :; }
+    tar() { :; }
+    mv() { :; }
+    rm() { :; }
+    . "${SCRIPT_DIR}/stacks/clickhouse/build.sh" "${root}/dist"
+  ) > "${root}/out.log" 2>&1
+  rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "  clickhouse build still accesses a stale hard-coded workspace" >&2
+    cat "${root}/out.log" >&2
+  fi
+  report "clickhouse builds without a stale workspace lookup" "${rc}"
+  rm -rf "${root}"
+}
+
 main() {
   test_mysql_installs_webauthn_build_dependency
   test_kvrocks_installs_dependencies_with_stack_helper
   test_mysql_strips_only_installed_elf_binaries
   test_mysql_preserves_strip_failure_status
   test_mongodb_exporter_builds_from_source
+  test_mongodb6_amd64_uses_published_ubuntu_archive
+  test_pack_build_keeps_tagged_go_dependencies
+  test_clickhouse_build_has_no_stale_workspace_lookup
 
   echo
   echo "${passed} passed, ${failed} failed"

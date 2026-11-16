@@ -564,7 +564,8 @@ class AlertSession:
     tag deletion. Every GitHub method requires the production timeout."""
 
     def __init__(self, search_items, created_number=555, recent_items=None,
-                 ref_status=201, ref_payload=None, delete_status=204):
+                 ref_status=201, ref_payload=None, delete_status=204,
+                 delete_payload=None):
         self.requests = []
         self._search = {"total_count": len(search_items), "items": search_items}
         self._recent = recent_items or []
@@ -572,6 +573,7 @@ class AlertSession:
         self._ref_status = ref_status
         self._ref_payload = ref_payload if ref_payload is not None else {}
         self._delete_status = delete_status
+        self._delete_payload = delete_payload if delete_payload is not None else {}
 
     @staticmethod
     def _check_timeout(timeout):
@@ -604,7 +606,7 @@ class AlertSession:
     def delete(self, url, headers=None, timeout=None, **kwargs):
         self._check_timeout(timeout)
         self.requests.append(("DELETE", url, None))
-        return FakeAlertResponse(status=self._delete_status)
+        return FakeAlertResponse(self._delete_payload, status=self._delete_status)
 
 
 class FailureIssueAlertTest(unittest.TestCase):
@@ -1260,10 +1262,22 @@ class RequestBuildTest(unittest.TestCase):
         session = AlertSession(search_items=[], delete_status=404)
         self.assertTrue(reconcile.delete_build_tag("nginx", "1.31.8", session=session))
 
+    def test_deleting_a_tag_removed_by_the_other_leg_succeeds(self):
+        session = AlertSession(
+            search_items=[],
+            delete_status=422,
+            delete_payload={"message": "Reference does not exist"},
+        )
+        self.assertTrue(reconcile.delete_build_tag("nginx", "1.31.8", session=session))
+
     def test_an_unexpected_deletion_error_propagates(self):
-        session = AlertSession(search_items=[], delete_status=500)
-        with self.assertRaises(RuntimeError):
-            reconcile.delete_build_tag("nginx", "1.31.8", session=session)
+        for status, payload in ((500, {}), (422, {"message": "Invalid request"})):
+            with self.subTest(status=status):
+                session = AlertSession(
+                    search_items=[], delete_status=status, delete_payload=payload,
+                )
+                with self.assertRaises(RuntimeError):
+                    reconcile.delete_build_tag("nginx", "1.31.8", session=session)
 
     def test_delete_without_token_makes_no_requests(self):
         os.environ.pop("GITHUB_TOKEN", None)

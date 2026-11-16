@@ -319,6 +319,78 @@ test_pack_build_keeps_tagged_go_dependencies() {
   rm -rf "${root}"
 }
 
+test_haproxy_builds_stable_source_with_production_features() {
+  local root rc options expected_commands
+  root="$(mktemp -d)"
+  CASE_ROOT="${root}"
+  DATA_DIR="${root}/data"
+  PROFILE_DIR="${DATA_DIR}/profile.d"
+  STACK_NAME="haproxy"
+  STACK_VERSION="3.4.0"
+  (
+    set -e
+    cd "${root}"
+    mkdir -p "${DATA_DIR}" "${PROFILE_DIR}"
+    function . {
+      if [ "${1:-}" = "/usr/bin/stack-utils" ]; then
+        :
+      else
+        builtin . "$@"
+      fi
+    }
+    build-stack() { build "$@"; }
+    install-packages() {
+      printf 'install-packages %s\n' "$*" >> "${CASE_ROOT}/commands"
+    }
+    nproc() { printf '4\n'; }
+    curl() {
+      printf 'curl %s\n' "$*" >> "${CASE_ROOT}/commands"
+      : > haproxy.tar.gz
+    }
+    tar() {
+      printf 'tar %s\n' "$*" >> "${CASE_ROOT}/commands"
+      mkdir -p "haproxy-${STACK_VERSION}"
+    }
+    make() {
+      local arg prefix=""
+      printf 'make %s\n' "$*" >> "${CASE_ROOT}/commands"
+      if [ "${1:-}" = "install" ]; then
+        for arg in "$@"; do
+          case "${arg}" in
+            PREFIX=*) prefix="${arg#PREFIX=}" ;;
+          esac
+        done
+        mkdir -p "${prefix}/sbin"
+        printf '#!/bin/sh\necho "HAProxy version 3.4.0"\n' > "${prefix}/sbin/haproxy"
+        chmod +x "${prefix}/sbin/haproxy"
+      fi
+    }
+    . "${SCRIPT_DIR}/stacks/haproxy/build.sh" "${root}/dist"
+  ) > "${root}/out.log" 2>&1
+  rc=$?
+  options='TARGET=linux-glibc USE_GETADDRINFO=1 USE_OPENSSL=1 USE_LUA=1 LUA_LIB_NAME=lua5.4 USE_PCRE2=1 USE_PCRE2_JIT=1 USE_PROMEX=1 USE_ZLIB=1'
+  expected_commands="install-packages libssl-dev libpcre2-dev liblua5.4-dev zlib1g-dev
+curl -fsSL -o haproxy.tar.gz https://github.com/haproxy/haproxy/archive/refs/tags/v3.4.0.tar.gz
+tar -xzf haproxy.tar.gz
+make -j 4 ${options}
+make install ${options} PREFIX=${root}/data"
+  if [ "${rc}" -ne 0 ]; then
+    echo "  haproxy source build failed" >&2
+    cat "${root}/out.log" >&2
+  elif [ ! -x "${root}/data/sbin/haproxy" ]; then
+    echo "  haproxy was not installed into the stack payload" >&2
+    rc=1
+  elif ! grep -Fqx 'export PATH="/opt/drycc/haproxy/sbin:$PATH"' "${root}/data/profile.d/haproxy.sh"; then
+    echo "  haproxy profile does not expose the sbin directory" >&2
+    rc=1
+  elif ! diff -u <(printf '%s\n' "${expected_commands}") "${root}/commands"; then
+    echo "  haproxy used unexpected download, dependency, or build commands" >&2
+    rc=1
+  fi
+  report "haproxy builds stable source with production features" "${rc}"
+  rm -rf "${root}"
+}
+
 test_clickhouse_build_has_no_stale_workspace_lookup() {
   local root rc
   root="$(mktemp -d)"
@@ -358,6 +430,7 @@ main() {
   test_mongodb_exporter_builds_from_source
   test_mongodb6_amd64_uses_published_ubuntu_archive
   test_pack_build_keeps_tagged_go_dependencies
+  test_haproxy_builds_stable_source_with_production_features
   test_clickhouse_build_has_no_stale_workspace_lookup
 
   echo

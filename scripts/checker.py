@@ -94,6 +94,12 @@ repo_info_table = {
         "owner": "grafana",
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
+    "haproxy": {
+        "name": "haproxy",
+        "type": "github",
+        "owner": "haproxy",
+        "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+    },
     "helm": {
         "name": "helm",
         "type": "github",

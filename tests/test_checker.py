@@ -191,6 +191,24 @@ class GithubDiscoveryTest(unittest.TestCase):
             self.assertNotIn("drycc/stacks", url)
 
 
+class HaproxyDiscoveryTest(unittest.TestCase):
+    def test_discovers_only_stable_numeric_releases(self):
+        self.assertIn("haproxy", checker.repo_info_table)
+        edges = [
+            edge("v3.5-dev12", "a1", "2026-11-16T10:00:00Z"),
+            edge("v3.4.0", "a2", "2026-11-15T10:00:00Z"),
+            edge("v3.4", "a3", "2026-11-14T10:00:00Z"),
+            edge("v3.3.1", "a4", "2026-11-13T10:00:00Z"),
+        ]
+        candidates = checker.discover_candidates(
+            "haproxy", session=github_session(edges)
+        )
+        self.assertEqual(
+            [candidate["version"] for candidate in candidates],
+            ["3.4.0", "3.3.1"],
+        )
+
+
 class PostgresqlDiscoveryTest(unittest.TestCase):
     EDGES = [
         edge("REL_18_7", "a7", "2026-11-09T20:09:29Z"),

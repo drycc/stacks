@@ -1092,6 +1092,24 @@ class ReconcileIssuesTest(unittest.TestCase):
             self.assertIn("not planned", call[2]["body"])
             self.assertNotIn("built successfully", call[2]["body"])
 
+    def test_unsupported_version_is_cancelled_without_checking_oss(self):
+        os.mkdir(os.path.join(self.tmp.name, "mongodb"))
+        session = ReconcileIssuesSession([
+            self.managed(23, stack="mongodb", version="5.0.35"),
+        ])
+        with mock.patch("storage.artifact_exists", return_value=False) as artifact:
+            counts = self.run_pass(session)
+        self.assertEqual(counts, {"closed": 0, "cancelled": 1, "skipped": 0})
+        artifact.assert_not_called()
+        patches = [call for call in session.requests if call[0] == "PATCH"]
+        self.assertEqual(
+            patches[0][2], {"state": "closed", "state_reason": "not_planned"},
+        )
+        comments = [call for call in session.requests
+                    if call[0] == "POST" and call[1].endswith("/comments")]
+        self.assertIn("not supported", comments[0][2]["body"])
+        self.assertIn("not planned", comments[0][2]["body"])
+
     def test_absent_stacks_are_cancelled_before_an_oss_outage_aborts(self):
         # cancellation needs no OSS, so removed stacks are still handled
         # before the OSS uncertainty on the remaining issue fails the run

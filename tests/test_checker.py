@@ -209,6 +209,21 @@ class HaproxyDiscoveryTest(unittest.TestCase):
         )
 
 
+class MongodbDiscoveryTest(unittest.TestCase):
+    def test_skips_versions_that_require_unavailable_openssl1(self):
+        edges = [
+            edge("r5.0.35", "a5", "2026-11-10T10:00:00Z"),
+            edge("r6.0.30", "a6", "2026-11-09T10:00:00Z"),
+        ]
+        candidates = checker.discover_candidates(
+            "mongodb", session=github_session(edges)
+        )
+        self.assertEqual(
+            [candidate["version"] for candidate in candidates],
+            ["6.0.30"],
+        )
+
+
 class PostgresqlDiscoveryTest(unittest.TestCase):
     EDGES = [
         edge("REL_18_7", "a7", "2026-11-09T20:09:29Z"),

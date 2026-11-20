@@ -5,6 +5,10 @@
 
 # Implement build function
 function build() {
+  if [[ ${STACK_VERSION} == [0-5].* ]]; then
+    echo "mongodb: ${STACK_VERSION} is not supported on ${OS_FLAVOUR}; MongoDB 6.0 or newer is required" >&2
+    return 1
+  fi
   generate-stack-path
   BIN_DIR="${DATA_DIR}"/bin
   mkdir -p "${BIN_DIR}"

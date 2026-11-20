@@ -1,5 +1,8 @@
 export PHPIZE_DEPS="autoconf dpkg-dev file g++ gcc libc-dev make pkg-config re2c"
 
+# Argon2 and PCRE2 are required by the packaged binaries at runtime.
+printf 'libpcre2-8-0\nlibargon2-1\n' >> "${META_DIR}/dependencies"
+
 # persistent / runtime deps
 set -eux; \
 	install-packages \
@@ -70,6 +73,10 @@ set -eux; \
 	if [ ! -d /usr/include/curl ]; then \
 		ln -sT "/usr/include/$debMultiarch/curl" /usr/local/include/curl; \
 	fi; \
+	PHP_PIC_OPTION=""; \
+	if ./configure --help | grep -q -- '--with-pic'; then \
+		PHP_PIC_OPTION="--with-pic"; \
+	fi; \
 	./configure \
 	    --prefix=/opt/drycc/php \
 		--build="$gnuArch" \
@@ -77,7 +84,7 @@ set -eux; \
 		--with-config-file-scan-dir="$PHP_INI_DIR/conf.d" \
 		--enable-option-checking=fatal \
 		--with-mhash \
-		--with-pic \
+		${PHP_PIC_OPTION} \
         --enable-ftp \
 		--enable-mbstring \
 		--enable-mysqlnd \
@@ -119,10 +126,10 @@ set -eux; \
 	apt-mark auto '.*' > /dev/null; \
 	[ -z "$savedAptMark" ] || apt-mark manual $savedAptMark; \
 	find /opt/drycc/php -type f -executable -exec ldd '{}' ';' \
-		| awk '/=>/ { print $(NF-1) }' \
+		| awk '/=>/ { so = $(NF-1); if (index(so, "/opt/drycc/php/") == 1) { next }; gsub("^/(usr/)?", "", so); printf "*%s\n", so }' \
 		| sort -u \
 		| xargs -r dpkg-query --search \
-		| cut -d: -f1 \
+		| awk 'sub(":$", "", $1) { print $1 }' \
 		| sort -u \
 		| xargs -r apt-mark manual \
 	; \

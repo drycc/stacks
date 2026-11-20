@@ -25,7 +25,7 @@ function build() {
   esac; \
   extraJemallocConfigureFlags="$extraJemallocConfigureFlags --with-lg-hugepage=21"; \
   grep -F 'cd jemalloc && ./configure ' /usr/src/valkey/deps/Makefile; \
-  sed -ri 's!cd jemalloc && ./configure !&'"$extraJemallocConfigureFlags"' !' /valkey/src/valkey/deps/Makefile; \
+  sed -ri 's!cd jemalloc && ./configure !&'"$extraJemallocConfigureFlags"' !' /usr/src/valkey/deps/Makefile; \
   grep -F "cd jemalloc && ./configure $extraJemallocConfigureFlags " /usr/src/valkey/deps/Makefile; \
   \
   export BUILD_TLS=yes; \

@@ -24,9 +24,9 @@ subcommand only closes the open failure issue; it retains the request tag as
 the build record.
 
 The reconcile-issues subcommand is the daily failure-issue sweep: it closes
-open failure issues whose exact artifact now exists (completed) or whose
-stack directory is gone (not_planned), and leaves everything else open for
-a later retry.
+open failure issues whose exact artifact now exists (completed), whose stack
+directory is gone, or whose version is unsupported (both not_planned), and
+leaves everything else open for a later retry.
 
 Usage:
     python3 scripts/reconcile.py plan [--arch ARCH] [--flavour FLAVOUR]
@@ -539,17 +539,26 @@ def _removed_stack_comment(stack, version, arch, flavour):
     )
 
 
+def _unsupported_version_comment(stack, version, arch, flavour):
+    """The unsupported-version close comment: cancellation, not success."""
+    return (
+        "Cancelling automatically: %s@%s on %s/%s is not supported by the"
+        " current build platform, so it cannot be built. Closing this issue"
+        " as not planned." % (stack, version, arch, flavour)
+    )
+
+
 def reconcile_issues(arch=None, dry_run=False, session=None, bucket=None,
                       stacks_dir=None):
     """Close open failure issues that no longer need attention.
 
     One daily pass over every open managed failure issue of the selected
-    arch: a stack whose directory is gone is cancelled as not_planned
-    without consulting request tags or OSS (it can never be built again),
-    and an issue whose exact normal artifact exists is closed as
-    completed - this also repairs a success whose resolution report
-    failed earlier. Anything else (artifact still missing) stays open,
-    and GitHub or OSS errors propagate so the caller can retry the run.
+    arch: a stack whose directory is gone or whose version is unsupported is
+    cancelled as not_planned without consulting request tags or OSS (it can
+    never be built on the current platform), and an issue whose exact normal
+    artifact exists is closed as completed - this also repairs a success whose
+    resolution report failed earlier. Anything else (artifact still missing)
+    stays open, and GitHub or OSS errors propagate so the caller can retry.
 
     Returns {"closed": n, "cancelled": n, "skipped": n}. Dry run performs
     the same discovery and verification but prints the closures it would
@@ -596,9 +605,25 @@ def reconcile_issues(arch=None, dry_run=False, session=None, bucket=None,
                       % (number, stack, parsed["version"]))
             counts["cancelled"] += 1
             continue
+        if not checker.is_supported_version(stack, parsed["version"]):
+            if dry_run:
+                print("would cancel (not_planned) #%d (%s@%s: not supported)"
+                      % (number, stack, parsed["version"]))
+            else:
+                _close_issue(
+                    session, headers, number,
+                    _unsupported_version_comment(
+                        stack, parsed["version"], parsed["arch"],
+                        parsed["flavour"]),
+                    "not_planned",
+                )
+                print("cancelled (not_planned) #%d (%s@%s: not supported)"
+                      % (number, stack, parsed["version"]))
+            counts["cancelled"] += 1
+            continue
         if storage_module is None:
-            # Imported lazily: cancelling removed stacks must work without
-            # any OSS credentials or connectivity.
+            # Imported lazily: cancelling removed stacks and unsupported
+            # versions must work without any OSS credentials or connectivity.
             import storage
             storage_module = storage
         if storage_module.artifact_exists(

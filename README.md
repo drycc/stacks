@@ -17,7 +17,10 @@ A Git tag named `<stack>@<version>` (for example `go@1.25.5`) is a build request
   (inside CI the tag defaults to `CI_COMMIT_TAG`).
 
 Malformed tag names and tags for stacks without a directory in the checked-out
-revision are rejected before anything is built.
+revision are rejected before anything is built. MongoDB versions below 6.0.0
+are also rejected: those releases require OpenSSL 1.1, which is not available
+in the current Debian 13 packages. Nightly planning excludes them and their
+failure issues are cancelled as `not_planned` instead of being retried forever.
 
 ## What the tag workflow does
 
@@ -82,6 +85,11 @@ platforms. Cron never builds stacks directly; it:
 4. Fails visibly if any request creation or cleanup step fails, while other
    items and cleanup steps still run.
 
+Retention generation reads Dockerfiles through immutable GitHub blob APIs with
+bounded exponential backoff and jitter. It does not depend on raw GitHub URLs;
+if every retry or a parse fails, no partial list is installed and OSS cleanup
+does not run with incomplete protection.
+
 ## Daily obsolete-tag cleanup
 
 `scripts/cleanup_obsolete_tags.py` runs nightly after OSS cleanup:
@@ -113,12 +121,19 @@ touch each other's issues):
   (`state_reason=not_planned`) with a comment explaining the stack was
   removed and can never be built again. This is a cancellation, not a claim
   of build success, and works even with no OSS credentials or tag.
-- **Stack still exists**: the issue is closed as *completed* only when the
-  exact normal artifact exists for the issue's arch/flavour — this also
-  repairs a success whose issue resolution failed earlier.
-- **Artifact missing, or GitHub/OSS state cannot be determined**: the issue
-  stays open for the normal tag retry path, and the run exits non-zero so the
-  next daily run retries. Issues are never closed on uncertainty.
+- **Version unsupported on the current build platform**: the issue is closed
+  as *not planned* without consulting OSS. For example, MongoDB 5.x cannot be
+  packaged for Debian 13 because it requires OpenSSL 1.1.
+- **Stack still exists and the version is supported**: the issue is closed as
+  *completed* only when the exact normal artifact exists for the issue's
+  arch/flavour — this also repairs a success whose issue resolution failed
+  earlier.
+- **Artifact missing**: the issue stays open for the normal tag retry path.
+  An unresolved build issue alone does not fail the daily pipeline, avoiding
+  duplicate alarms for failures already reported by the tag pipeline.
+- **GitHub/OSS state cannot be determined**: the issue stays open and the run
+  exits non-zero so the next daily run retries. Issues are never closed on
+  uncertainty.
 
 ## Dry-run flags
 

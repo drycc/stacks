@@ -3,6 +3,7 @@
 Run: .venv/bin/python -m unittest discover -s tests -p 'test_retention.py' -v
 """
 
+import base64
 import io
 import os
 import sys
@@ -190,7 +191,7 @@ class FakeGithubClient:
     def __init__(self, dockerfiles=None, error=None):
         self.dockerfiles = dockerfiles or {}
         self.error = error
-        self.raw_requests = []
+        self.blob_requests = []
 
     def get_json(self, path, params=None):
         if self.error:
@@ -209,10 +210,14 @@ class FakeGithubClient:
         raise AssertionError("unexpected API path: " + path)
 
     def get_text(self, repo, sha, path):
-        self.raw_requests.append((repo, sha, path))
-        if path not in self.dockerfiles:
-            raise AssertionError("unexpected raw path: " + path)
-        return self.dockerfiles[path]
+        raise AssertionError("raw Dockerfile downloads must not be used")
+
+    def get_blob(self, repo, blob_sha):
+        self.blob_requests.append((repo, blob_sha))
+        for index, text in enumerate(self.dockerfiles.values()):
+            if blob_sha == "blob-" + str(index):
+                return text
+        raise AssertionError("unexpected blob: " + blob_sha)
 
 
 class GenerateTest(unittest.TestCase):
@@ -236,8 +241,10 @@ class GenerateTest(unittest.TestCase):
             ("jq", "1.8.2"),
         })
         self.assertEqual(reports, ["example/containers@abc123: 2 Dockerfile(s)"])
-        self.assertTrue(client.raw_requests)
-        self.assertTrue(all(sha == "abc123" for _, sha, _ in client.raw_requests))
+        self.assertEqual(
+            client.blob_requests,
+            [("example/containers", "blob-0"), ("example/containers", "blob-1")],
+        )
 
     def test_test_dockerfiles_contribute_retention_rules(self):
         client = FakeGithubClient({
@@ -318,6 +325,54 @@ class GenerateTest(unittest.TestCase):
 
 
 class GithubClientTest(unittest.TestCase):
+    def test_downloads_dockerfiles_through_the_blob_api(self):
+        response = mock.Mock(status_code=200, text="")
+        response.json.return_value = {
+            "sha": "abc123",
+            "node_id": "blob-node",
+            "size": 24,
+            "encoding": "base64",
+            "content": base64.b64encode(b"RUN install-stack jq 1.8.2\n").decode(),
+            "url": "https://api.github.com/repos/example/containers/git/blobs/abc123",
+        }
+        session = mock.Mock()
+        session.get.return_value = response
+        client = retention.GithubClient(session=session)
+        self.assertTrue(
+            hasattr(client, "get_blob"),
+            "Dockerfile downloads must use the GitHub blob API",
+        )
+        self.assertEqual(
+            client.get_blob("example/containers", "abc123"),
+            "RUN install-stack jq 1.8.2\n",
+        )
+        args, kwargs = session.get.call_args
+        self.assertEqual(
+            args[0],
+            "https://api.github.com/repos/example/containers/git/blobs/abc123",
+        )
+        self.assertIsNone(kwargs["params"])
+        self.assertEqual(kwargs["timeout"], 30)
+
+    def test_rejects_a_blob_with_an_unsupported_encoding(self):
+        response = mock.Mock(status_code=200, text="")
+        response.json.return_value = {"encoding": "utf-8", "content": "text"}
+        session = mock.Mock()
+        session.get.return_value = response
+        client = retention.GithubClient(session=session)
+        self.assertTrue(hasattr(client, "get_blob"))
+        with self.assertRaisesRegex(retention.RetentionError, "encoding"):
+            client.get_blob("example/containers", "abc123")
+
+    def test_transient_failures_use_bounded_exponential_backoff_with_jitter(self):
+        client = retention.GithubClient()
+        retry = client.session.get_adapter("https://").max_retries
+        self.assertEqual(retry.total, 6)
+        self.assertEqual(retry.backoff_factor, 1)
+        self.assertGreater(retry.backoff_jitter, 0)
+        self.assertIn(503, retry.status_forcelist)
+        self.assertTrue(retry.respect_retry_after_header)
+
     def test_http_errors_are_retention_errors_and_do_not_leak_the_token(self):
         response = mock.Mock(status_code=403, text="rate limited")
         session = mock.Mock()

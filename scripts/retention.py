@@ -8,6 +8,7 @@ GitHub or parsing failures abort before a new output file is installed.
 """
 
 import argparse
+import base64
 import os
 import re
 import shlex
@@ -25,7 +26,6 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DEFAULT_RETENTION_REPO = os.path.join(ROOT, "retention-repo.txt")
 DEFAULT_RETENTION_LIST = os.path.join(ROOT, "retention-list.txt")
 API_ROOT = "https://api.github.com"
-RAW_ROOT = "https://raw.githubusercontent.com"
 REPO_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 VERSION_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+~-]*")
 VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
@@ -51,11 +51,12 @@ class GithubClient:
             self.headers["Authorization"] = "Bearer " + token
         if session is None:
             retry = Retry(
-                total=3,
-                connect=3,
-                read=3,
-                status=3,
-                backoff_factor=0.5,
+                total=6,
+                connect=6,
+                read=6,
+                status=6,
+                backoff_factor=1,
+                backoff_jitter=0.5,
                 status_forcelist=(429, 500, 502, 503, 504),
                 allowed_methods=frozenset(["GET"]),
                 respect_retry_after_header=True,
@@ -83,11 +84,25 @@ class GithubClient:
         except ValueError as exc:
             raise RetentionError(f"GitHub returned invalid JSON: {path}") from exc
 
-    def get_text(self, repo, sha, path):
-        url = "%s/%s/%s/%s" % (
-            RAW_ROOT, quote(repo, safe="/"), quote(sha, safe=""), quote(path, safe="/"),
+    def get_blob(self, repo, blob_sha):
+        """Return a Dockerfile from an immutable Git blob, never a raw URL."""
+        path = "/repos/%s/git/blobs/%s" % (
+            quote(repo, safe="/"), quote(blob_sha, safe=""),
         )
-        return self._get(url).text
+        payload = self.get_json(path)
+        if not isinstance(payload, dict) \
+                or payload.get("encoding") != "base64" \
+                or not isinstance(payload.get("content"), str):
+            raise RetentionError(
+                "unsupported GitHub blob encoding for %s@%s" % (repo, blob_sha)
+            )
+        encoded = "".join(payload["content"].split())
+        try:
+            return base64.b64decode(encoded, validate=True).decode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise RetentionError(
+                "invalid GitHub blob content for %s@%s" % (repo, blob_sha)
+            ) from exc
 
 
 def parse_repo_list(lines):
@@ -260,7 +275,7 @@ def fetch_repo_rules(repo, client):
     versions = set()
     for entry in entries:
         path = entry["path"]
-        text = client.get_text(repo, sha, path)
+        text = client.get_blob(repo, entry["sha"])
         file_stacks, file_versions = parse_dockerfile(
             text, source=f"{repo}@{sha}:{path}",
         )

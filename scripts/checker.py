@@ -391,6 +391,7 @@ repo_info_table = {
         "type": "github",
         "owner": "mongodb",
         "match": "^r[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+        "minimum_version": "6.0.0",
     },
     "mongosh": {
         "name": "mongosh",
@@ -429,6 +430,17 @@ repo_info_table = {
         "match": "^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
     },
 }
+
+
+def is_supported_version(stack, version):
+    """Return whether a stack version is supported by the current packages."""
+    minimum = repo_info_table.get(stack, {}).get("minimum_version")
+    if minimum is None:
+        return True
+    try:
+        return parse(version) >= parse(minimum)
+    except InvalidVersion:
+        return False
 
 
 def normalize_version(tag_name):
@@ -566,6 +578,8 @@ def _github_candidates(stack, info, session):
         if not re.match(info["match"], name):
             continue
         version = normalize_version(name)
+        if not is_supported_version(stack, version):
+            continue
         if version in seen:
             continue
         seen.add(version)

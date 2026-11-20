@@ -14,7 +14,23 @@ function build() {
   rm -rf jmx_exporter-${STACK_VERSION} jmx_exporter-${STACK_VERSION}.linux-${OS_ARCH} tmp.tar.gz
   curl -fsSL -o "${DATA_DIR}"/jmx_prometheus_standalone.jar https://github.com/prometheus/jmx_exporter/releases/download/${STACK_VERSION}/jmx_prometheus_standalone-${STACK_VERSION}.jar
   curl -fsSL -o "${DATA_DIR}"/jmx_prometheus_javaagent.jar https://github.com/prometheus/jmx_exporter/releases/download/${STACK_VERSION}/jmx_prometheus_javaagent-${STACK_VERSION}.jar
-  curl -fsSL -o "${DATA_DIR}"/jmx_prometheus_isolator_javaagent.jar https://github.com/prometheus/jmx_exporter/releases/download/${STACK_VERSION}/jmx_prometheus_isolator_javaagent-${STACK_VERSION}.jar
+  ISOLATOR_URL="https://github.com/prometheus/jmx_exporter/releases/download/${STACK_VERSION}/jmx_prometheus_isolator_javaagent-${STACK_VERSION}.jar"
+  if ! ISOLATOR_STATUS=$(curl -sSL --head -o /dev/null -w '%{http_code}' "${ISOLATOR_URL}"); then
+    echo "jmx_exporter: failed to check optional isolator asset" >&2
+    return 1
+  fi
+  case "${ISOLATOR_STATUS}" in
+    200)
+      curl -fsSL -o "${DATA_DIR}"/jmx_prometheus_isolator_javaagent.jar "${ISOLATOR_URL}"
+      ;;
+    404)
+      echo "jmx_exporter: isolator is not published for ${STACK_VERSION}; skipping"
+      ;;
+    *)
+      echo "jmx_exporter: optional isolator check returned HTTP ${ISOLATOR_STATUS}" >&2
+      return 1
+      ;;
+  esac
 }
 
 # call build stack

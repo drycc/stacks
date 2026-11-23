@@ -104,6 +104,76 @@ test_kvrocks_installs_dependencies_with_stack_helper() {
   rm -rf "${root}"
 }
 
+test_redis_bootstraps_rust_module_dependencies() {
+  local root rc stack case_root case_rc
+  root="$(mktemp -d)"
+  rc=0
+  for stack in redis redis-sentinel; do
+    case_root="${root}/${stack}"
+    mkdir -p "${case_root}/home"
+    (
+      set -e
+      CASE_ROOT="${case_root}"
+      HOME="${case_root}/home"
+      STACK_NAME="${stack}"
+      STACK_VERSION="8.12.0"
+      function . {
+        if [ "${1:-}" = "/usr/bin/stack-utils" ]; then
+          :
+        else
+          builtin . "$@"
+        fi
+      }
+      build-stack() { build "$@"; }
+      apt-mark() { :; }
+      curl() { :; }
+      mkdir() { :; }
+      tar() { :; }
+      rm() { :; }
+      grep() { :; }
+      sed() { :; }
+      dpkg-architecture() { printf 'x86_64-linux-gnu\n'; }
+      dpkg() { printf 'amd64\n'; }
+      nproc() { printf '2\n'; }
+      make() {
+        if [ "$#" -eq 5 ] && [ "$1" = "-C" ] && [ "$2" = "/usr/src/redis" ] && \
+            [ "$3" = "bootstrap" ] && [ "$4" = "redisearch" ] && [ "$5" = "redisjson" ]; then
+          command mkdir -p "${HOME}/.cargo/bin"
+          for tool in cargo rustc; do
+            printf '#!/bin/sh\n' > "${HOME}/.cargo/bin/${tool}"
+            command chmod +x "${HOME}/.cargo/bin/${tool}"
+          done
+          : > "${CASE_ROOT}/bootstrapped"
+          return 0
+        fi
+        if [ "$#" -eq 5 ] && [ "$1" = "-C" ] && [ "$2" = "/usr/src/redis" ] && \
+            [ "$3" = "-j" ] && [ "$4" = "2" ] && [ "$5" = "all" ]; then
+          if [ ! -f "${CASE_ROOT}/bootstrapped" ]; then
+            echo 'Dependency check failed: cargo is missing' >&2
+            return 2
+          fi
+          if ! command -v cargo > /dev/null || ! command -v rustc > /dev/null; then
+            echo 'rustup toolchain is not on PATH' >&2
+            return 2
+          fi
+          return 42
+        fi
+        echo "unexpected make invocation: $*" >&2
+        return 99
+      }
+      . "${SCRIPT_DIR}/stacks/${stack}/build.sh" "${case_root}/dist"
+    ) > "${case_root}/out.log" 2>&1
+    case_rc=$?
+    if [ "${case_rc}" -ne 42 ]; then
+      echo "  ${stack} did not bootstrap its Rust modules before building (rc=${case_rc})" >&2
+      cat "${case_root}/out.log" >&2
+      rc=1
+    fi
+  done
+  report "redis stacks bootstrap Rust module dependencies" "${rc}"
+  rm -rf "${root}"
+}
+
 test_mysql_strips_only_installed_elf_binaries() {
   local root rc
   root="$(mktemp -d)"
@@ -899,6 +969,7 @@ test_clickhouse_build_has_no_stale_workspace_lookup() {
 main() {
   test_mysql_installs_webauthn_build_dependency
   test_kvrocks_installs_dependencies_with_stack_helper
+  test_redis_bootstraps_rust_module_dependencies
   test_mysql_strips_only_installed_elf_binaries
   test_mysql_preserves_strip_failure_status
   test_mongodb_exporter_builds_from_source

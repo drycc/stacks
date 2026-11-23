@@ -29,6 +29,10 @@ function build() {
   grep -F "cd jemalloc && ./configure $extraJemallocConfigureFlags " /usr/src/redis/deps/Makefile; \
   \
   export BUILD_TLS=yes; \
+  if grep -q '^bootstrap:' /usr/src/redis/Makefile; then \
+    make -C /usr/src/redis bootstrap redisearch redisjson; \
+    export PATH="${HOME}/.cargo/bin:${PATH}"; \
+  fi; \
   make -C /usr/src/redis -j "$(nproc)" all; \
   make -C /usr/src/redis PREFIX=/opt/drycc/redis install; \
   \

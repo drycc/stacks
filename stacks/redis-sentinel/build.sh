@@ -68,7 +68,7 @@ function build() {
     | sort -u \
     | xargs -r apt-mark manual \
   ; \
-  apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
+  SUDO_FORCE_REMOVE=yes apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false; \
   \
   /opt/drycc/redis-sentinel/bin/redis-cli --version; \
   /opt/drycc/redis-sentinel/bin/redis-server --version

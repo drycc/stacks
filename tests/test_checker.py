@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import unittest
+import warnings
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
@@ -449,6 +450,18 @@ class NoSideEffectsTest(unittest.TestCase):
         self.assertIsNone(getattr(checker, "__main__", None))
         source = open(checker.__file__).read()
         self.assertNotIn('__name__ == "__main__"', source)
+
+    def test_regexes_compile_without_syntax_warnings(self):
+        with open(checker.__file__) as source_file:
+            source = source_file.read()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", SyntaxWarning)
+            compile(source, checker.__file__, "exec")
+        messages = [
+            str(item.message) for item in caught
+            if issubclass(item.category, SyntaxWarning)
+        ]
+        self.assertEqual(messages, [])
 
     def test_only_supported_types(self):
         for stack, info in checker.repo_info_table.items():

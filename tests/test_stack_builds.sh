@@ -104,7 +104,7 @@ test_kvrocks_installs_dependencies_with_stack_helper() {
   rm -rf "${root}"
 }
 
-test_redis_bootstraps_rust_module_dependencies() {
+test_redis_retries_transient_module_bootstrap_failures() {
   local root rc stack case_root case_rc
   root="$(mktemp -d)"
   rc=0
@@ -135,9 +135,15 @@ test_redis_bootstraps_rust_module_dependencies() {
       dpkg-architecture() { printf 'x86_64-linux-gnu\n'; }
       dpkg() { printf 'amd64\n'; }
       nproc() { printf '2\n'; }
+      sleep() { :; }
       make() {
         if [ "$#" -eq 5 ] && [ "$1" = "-C" ] && [ "$2" = "/usr/src/redis" ] && \
             [ "$3" = "bootstrap" ] && [ "$4" = "redisearch" ] && [ "$5" = "redisjson" ]; then
+          if [ ! -f "${CASE_ROOT}/bootstrap-attempted" ]; then
+            : > "${CASE_ROOT}/bootstrap-attempted"
+            echo 'error downloading file: tcp connect error: Connection timed out (os error 110)' >&2
+            return 1
+          fi
           command mkdir -p "${HOME}/.cargo/bin"
           for tool in cargo rustc; do
             printf '#!/bin/sh\n' > "${HOME}/.cargo/bin/${tool}"
@@ -165,12 +171,12 @@ test_redis_bootstraps_rust_module_dependencies() {
     ) > "${case_root}/out.log" 2>&1
     case_rc=$?
     if [ "${case_rc}" -ne 42 ]; then
-      echo "  ${stack} did not bootstrap its Rust modules before building (rc=${case_rc})" >&2
+      echo "  ${stack} did not recover from a transient bootstrap failure (rc=${case_rc})" >&2
       cat "${case_root}/out.log" >&2
       rc=1
     fi
   done
-  report "redis stacks bootstrap Rust module dependencies" "${rc}"
+  report "redis stacks retry transient module bootstrap failures" "${rc}"
   rm -rf "${root}"
 }
 
@@ -969,7 +975,7 @@ test_clickhouse_build_has_no_stale_workspace_lookup() {
 main() {
   test_mysql_installs_webauthn_build_dependency
   test_kvrocks_installs_dependencies_with_stack_helper
-  test_redis_bootstraps_rust_module_dependencies
+  test_redis_retries_transient_module_bootstrap_failures
   test_mysql_strips_only_installed_elf_binaries
   test_mysql_preserves_strip_failure_status
   test_mongodb_exporter_builds_from_source

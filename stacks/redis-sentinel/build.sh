@@ -30,7 +30,16 @@ function build() {
   \
   export BUILD_TLS=yes; \
   if grep -q '^bootstrap:' /usr/src/redis/Makefile; then \
-    make -C /usr/src/redis bootstrap redisearch redisjson; \
+    for REDIS_BOOTSTRAP_ATTEMPT in 1 2 3; do \
+      if make -C /usr/src/redis bootstrap redisearch redisjson; then \
+        break; \
+      fi; \
+      if [ "${REDIS_BOOTSTRAP_ATTEMPT}" -eq 3 ]; then \
+        echo "${STACK_NAME}: module bootstrap failed after 3 attempts" >&2; \
+        return 1; \
+      fi; \
+      sleep "$((REDIS_BOOTSTRAP_ATTEMPT * 10))"; \
+    done; \
     export PATH="${HOME}/.cargo/bin:${PATH}"; \
   fi; \
   make -C /usr/src/redis -j "$(nproc)" all; \

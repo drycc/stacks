@@ -274,6 +274,42 @@ class PostgresqlDiscoveryTest(unittest.TestCase):
             checker.discover_candidates("postgresql", session=session)
 
 
+class TelegrafDiscoveryTest(unittest.TestCase):
+    EDGES = [
+        edge("v1.40.4", "a4", "2026-11-23T19:53:42Z"),
+        edge("v1.40.3", "a3", "2026-10-20T10:00:00Z"),
+    ]
+    SOURCE_1_40_4 = (
+        "https://dl.influxdata.com/telegraf/releases/"
+        "telegraf-1.40.4_linux_amd64.tar.gz"
+    )
+    SOURCE_1_40_3 = (
+        "https://dl.influxdata.com/telegraf/releases/"
+        "telegraf-1.40.3_linux_amd64.tar.gz"
+    )
+
+    def setUp(self):
+        self._orig_requests = checker.requests
+        checker.requests = StrictRequests()
+
+    def tearDown(self):
+        checker.requests = self._orig_requests
+
+    def test_skips_git_tag_until_official_archive_is_published(self):
+        session = github_session(
+            self.EDGES,
+            heads={
+                self.SOURCE_1_40_4: {"status_code": 404},
+                self.SOURCE_1_40_3: {"status_code": 200},
+            },
+        )
+        candidates = checker.discover_candidates("telegraf", session=session)
+        self.assertEqual(
+            [candidate["version"] for candidate in candidates],
+            ["1.40.3"],
+        )
+
+
 class UrlDiscoveryTest(unittest.TestCase):
     URL_STACK = "fakeurl"
     URL_INFO = {

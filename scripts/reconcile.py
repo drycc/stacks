@@ -663,9 +663,10 @@ def request_build(stack, version, sha=None, session=None):
 
     The lightweight tag points at the requested commit. Both matrix legs may
     request the same item, so whichever finishes first creates the tag and
-    the other skips on the 422 "Reference already exists". Returns the
-    created ref, or None when the tag already exists or no GITHUB_TOKEN is
-    available.
+    the other skips on the 422 "Reference already exists". GitHub can instead
+    return 500 for that race, so confirm an existing ref before skipping.
+    Returns the created ref, or None when the tag already exists or no
+    GITHUB_TOKEN is available.
     """
     headers = _github_headers()
     if headers is None:
@@ -685,6 +686,15 @@ def request_build(stack, version, sha=None, session=None):
     if response.status_code == 422 and "already exists" in response.json().get("message", ""):
         print("reconcile: request: %s already exists, skipping" % ref, file=sys.stderr)
         return None
+    if response.status_code == 500:
+        existing = session.get(
+            "https://api.github.com/repos/drycc/stacks/git/%s" % ref,
+            headers=headers,
+            timeout=30,
+        )
+        if existing.status_code == 200:
+            print("reconcile: request: %s already exists, skipping" % ref, file=sys.stderr)
+            return None
     response.raise_for_status()
     print("reconcile: request: created %s at %s" % (ref, sha[:12]), file=sys.stderr)
     return ref

@@ -259,6 +259,10 @@ repo_info_table = {
         "type": "github",
         "owner": "influxdata",
         "match": r"^v[0-9]{1,}\.[0-9]{1,}\.[0-9]{1,}$",
+        "source_url": (
+            "https://dl.influxdata.com/telegraf/releases/"
+            "telegraf-{version}_linux_amd64.tar.gz"
+        ),
     },
     "wait-for-port": {
         "name": "wait-for-port",

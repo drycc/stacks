@@ -564,14 +564,16 @@ class AlertSession:
     tag deletion. Every GitHub method requires the production timeout."""
 
     def __init__(self, search_items, created_number=555, recent_items=None,
-                 ref_status=201, ref_payload=None, delete_status=204,
-                 delete_payload=None):
+                 ref_status=201, ref_payload=None, ref_get_status=404,
+                 ref_get_payload=None, delete_status=204, delete_payload=None):
         self.requests = []
         self._search = {"total_count": len(search_items), "items": search_items}
         self._recent = recent_items or []
         self._created_number = created_number
         self._ref_status = ref_status
         self._ref_payload = ref_payload if ref_payload is not None else {}
+        self._ref_get_status = ref_get_status
+        self._ref_get_payload = ref_get_payload if ref_get_payload is not None else {}
         self._delete_status = delete_status
         self._delete_payload = delete_payload if delete_payload is not None else {}
 
@@ -587,6 +589,8 @@ class AlertSession:
             return FakeAlertResponse(self._search)
         if url.endswith("/repos/drycc/stacks/issues"):
             return FakeAlertResponse(self._recent)
+        if "/repos/drycc/stacks/git/refs/tags/" in url:
+            return FakeAlertResponse(self._ref_get_payload, status=self._ref_get_status)
         raise AssertionError("unexpected GET %s" % url)
 
     def post(self, url, json=None, headers=None, timeout=None, **kwargs):
@@ -1241,6 +1245,26 @@ class RequestBuildTest(unittest.TestCase):
         )
         ref = reconcile.request_build("nginx", "1.31.8", sha="a" * 40, session=session)
         self.assertIsNone(ref)
+
+    def test_skips_when_concurrent_creation_returns_500_but_ref_exists(self):
+        session = AlertSession(
+            search_items=[],
+            ref_status=500,
+            ref_get_status=200,
+            ref_get_payload={
+                "ref": "refs/tags/nginx@1.31.8",
+                "object": {"sha": "a" * 40, "type": "commit"},
+            },
+        )
+        ref = reconcile.request_build("nginx", "1.31.8", sha="a" * 40, session=session)
+        self.assertIsNone(ref)
+
+    def test_a_500_without_an_existing_ref_is_an_error(self):
+        session = AlertSession(
+            search_items=[], ref_status=500, ref_get_status=404,
+        )
+        with self.assertRaises(RuntimeError):
+            reconcile.request_build("nginx", "1.31.8", sha="a" * 40, session=session)
 
     def test_a_422_that_is_not_a_duplicate_is_an_error(self):
         session = AlertSession(

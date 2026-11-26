@@ -7,14 +7,15 @@ and prints one stack@version item per line to stdout. Statistics go to
 stderr. An upstream or OSS failure aborts the run instead of producing a
 plan.
 
-Only candidates newer than the newest version already stored in the SAME
+Existing OSS versions and upstream candidates form the exact nested window
+through checker.retention_window. Within that window, only candidates newer
+than the newest version already stored in the SAME
 series for the current stack/arch/flavour are eligible. A series is the
 version with its final dot-separated component removed (13.4 -> 13,
-8.0.1 -> 8.0). The newest N eligible candidates in each series form the
-planning windows (checker.retention_keep). Older holes are never
-backfilled, while a new release in an older maintained series can still
-be built alongside a newer series. Missing versions inside an effective
-window are still built, subject to the per-run caps.
+8.0.1 -> 8.0). The newest patch-count eligible candidates in each series
+form the planning windows (checker.retention_keep). Older holes and
+versions outside active branches are never backfilled. Missing versions
+inside an effective window are still built, subject to the per-run caps.
 
 The request subcommand creates a stack@version tag to start a build, and
 abandon deletes that request after a failed build. The alert subcommand tracks
@@ -30,7 +31,8 @@ leaves everything else open for a later retry.
 
 Usage:
     python3 scripts/reconcile.py plan [--arch ARCH] [--flavour FLAVOUR]
-        [--max-per-stack N] [--max-total N] [--retention N] [--stack NAME]
+        [--max-per-stack N] [--max-total N] [--stack NAME]
+        [--keep-major-count N] [--keep-minor-count N] [--keep-patch-count N]
     python3 scripts/reconcile.py request --stack NAME --version VERSION [--sha SHA]
     python3 scripts/reconcile.py abandon --stack NAME --version VERSION
     python3 scripts/reconcile.py alert --stack NAME --version VERSION
@@ -135,7 +137,10 @@ def _newest_existing_versions(existing, stack, arch, flavour):
 
 
 def build_plan(arch, flavour, stacks=None, discover=None, bucket=None,
-               max_per_stack=1, max_total=10, retention=checker.DEFAULT_RETENTION):
+               max_per_stack=1, max_total=10,
+               major_count=checker.DEFAULT_MAJOR_RETENTION,
+               minor_count=checker.DEFAULT_MINOR_RETENTION,
+               patch_count=checker.DEFAULT_PATCH_RETENTION):
     """Reconcile upstream candidates against OSS and pick what to build.
 
     Returns (chosen, deferred, dropped): chosen is a list of candidate
@@ -144,14 +149,14 @@ def build_plan(arch, flavour, stacks=None, discover=None, bucket=None,
     later runs; dropped counts missing versions outside the effective
     planning window.
 
-    The planner rolls forward within each version series: a candidate is
-    eligible only when it is newer than the newest version already stored
-    in that series for this exact stack/arch/flavour. A series with no
-    existing object is eligible too. The newest N eligible candidates in
-    each series form the retention windows (checker.retention_keep).
-    Older holes are never backfilled, so versions deleted by the cleaner
-    cannot be rebuilt - even when OSS contains versions upstream
-    discovery did not return, or when the cleaner uses a different N.
+    Candidates must belong to the exact shared retention window over
+    existing and candidate versions. Within that window, the planner
+    rolls forward within each version series: a candidate is eligible only
+    when it is newer than the newest version already stored in that series
+    for this exact stack/arch/flavour. A series with no existing object is
+    eligible too. The newest patch-count eligible candidates in each series
+    form the planning windows (checker.retention_keep). Older holes are
+    never backfilled, so versions deleted by the cleaner cannot be rebuilt.
     """
     if discover is None:
         discover = checker.discover_candidates
@@ -171,24 +176,39 @@ def build_plan(arch, flavour, stacks=None, discover=None, bucket=None,
             continue
         existing = list_existing_keys(bucket, "stacks/%s/%s-" % (stack, stack))
         newest_existing = _newest_existing_versions(existing, stack, arch, flavour)
+        target_versions = []
+        for existing_key in existing:
+            parsed_key = checker.parse_object_key(existing_key)
+            if parsed_key is None:
+                continue
+            key_stack, version, key_arch, key_flavour = parsed_key
+            if (key_stack, key_arch, key_flavour) == (stack, arch, flavour):
+                target_versions.append(version)
+        target_window = set(checker.retention_window(
+            target_versions + [candidate["version"] for candidate in candidates],
+            major_count=major_count, minor_count=minor_count,
+            patch_count=patch_count,
+        ))
         eligible_by_series = {}
         for candidate in candidates:
+            if candidate["version"] not in target_window:
+                continue
+            try:
+                parsed_candidate = parse(candidate["version"])
+            except InvalidVersion:
+                parsed_candidate = None
             series = checker.version_series(candidate["version"])
             boundary = newest_existing.get(series)
             if boundary is None:
                 eligible_by_series.setdefault(series, []).append(candidate)
                 continue
-            try:
-                if parse(candidate["version"]) > boundary:
-                    eligible_by_series.setdefault(series, []).append(candidate)
-            except InvalidVersion:
-                # retention_keep applies the same conservative rule:
-                # unknown-age versions are not discarded by a guess.
+            if parsed_candidate is None or parsed_candidate > boundary:
+                # Unknown-age versions are not discarded by a guess.
                 eligible_by_series.setdefault(series, []).append(candidate)
         kept = set()
         for eligible in eligible_by_series.values():
             kept.update(checker.retention_keep(
-                [candidate["version"] for candidate in eligible], retention))
+                [candidate["version"] for candidate in eligible], patch_count))
         missing = []
         for candidate in candidates:
             if object_key(stack, candidate["version"], arch, flavour) in existing:
@@ -221,7 +241,9 @@ def cmd_plan(args):
             stacks=args.stacks,
             max_per_stack=args.max_per_stack,
             max_total=args.max_total,
-            retention=args.retention,
+            major_count=args.keep_major_count,
+            minor_count=args.keep_minor_count,
+            patch_count=args.keep_patch_count,
         )
     except Exception as exc:  # noqa: BLE001 - abort rather than mis-plan
         print("reconcile: planning failed: %s" % exc, file=sys.stderr)
@@ -808,9 +830,16 @@ def main(argv=None):
         help="max items per run (default: 10)",
     )
     plan_parser.add_argument(
-        "--retention", type=int, default=checker.DEFAULT_RETENTION,
-        help="newest versions kept per stack, shared with cleaner.py"
-             " (default: %d)" % checker.DEFAULT_RETENTION,
+        "--keep-major-count", type=int, default=checker.DEFAULT_MAJOR_RETENTION,
+        help="major versions kept per stack, shared with cleaner.py (default: %(default)s)",
+    )
+    plan_parser.add_argument(
+        "--keep-minor-count", type=int, default=checker.DEFAULT_MINOR_RETENTION,
+        help="minor versions kept per major, shared with cleaner.py (default: %(default)s)",
+    )
+    plan_parser.add_argument(
+        "--keep-patch-count", type=int, default=checker.DEFAULT_PATCH_RETENTION,
+        help="patch versions kept per minor, shared with cleaner.py (default: %(default)s)",
     )
     plan_parser.add_argument(
         "--stack", action="append", dest="stacks",
@@ -867,8 +896,10 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     if args.command == "plan":
-        if args.retention < 1:
-            plan_parser.error("--retention must be at least 1")
+        for level in ("major", "minor", "patch"):
+            option = "--keep-%s-count" % level
+            if getattr(args, "keep_%s_count" % level) < 1:
+                plan_parser.error("%s must be at least 1" % option)
         if args.arch is None:
             args.arch = detect_arch()
         if args.flavour is None:

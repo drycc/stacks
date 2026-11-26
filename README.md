@@ -73,15 +73,15 @@ normal artifact exists in OSS.
 `.woodpecker/build.yml` runs `./build.sh reconcile` for cron events on both
 platforms. Cron never builds stacks directly; it:
 
-1. Plans missing versions from OSS per arch/flavour (unchanged planner,
-   retention window and per-run caps).
+1. Plans missing versions from OSS per arch/flavour (nested retention
+   window, roll-forward planning and per-run caps).
 2. Creates `refs/tags/<stack>@<version>` at `CI_COMMIT_SHA` for every planned
    item. A tag that already exists is reported and skipped — Git ref
    uniqueness is the deduplication between cron and manual requests. Creating
    the tag triggers the same tag workflow documented above.
 3. Runs the daily cleanup phase in order: retention-list generation, OSS
-   object cleanup (`scripts/cleaner.py`, unchanged policy), obsolete-tag
-   cleanup, and failure-issue reconciliation.
+   object cleanup (`scripts/cleaner.py`), obsolete-tag cleanup, and
+   failure-issue reconciliation.
 4. Fails visibly if any request creation or cleanup step fails, while other
    items and cleanup steps still run.
 
@@ -89,6 +89,39 @@ Retention generation reads Dockerfiles through immutable GitHub blob APIs with
 bounded exponential backoff and jitter. It does not depend on raw GitHub URLs;
 if every retry or a parse fails, no partial list is installed and OSS cleanup
 does not run with incomplete protection.
+
+## Daily OSS retention cleanup
+
+The default retention window is **3 majors / 2 minors per major / 2 patches
+per minor**. Both the cleaner and the nightly planner accept the same options:
+
+| Level | CLI option | Environment variable | Default |
+| --- | --- | --- | --- |
+| Major | `--keep-major-count` | `CLEANER_KEEP_MAJOR_COUNT` | `3` |
+| Minor | `--keep-minor-count` | `CLEANER_KEEP_MINOR_COUNT` | `2` |
+| Patch | `--keep-patch-count` | `CLEANER_KEEP_PATCH_COUNT` | `2` |
+
+For each `(stack, arch, flavour)`, the cleaner keeps the newest major
+versions, then the newest minor branches within each retained major, then
+the newest patches within each retained minor. Ordering is semantic, not
+lexicographic. Unparseable versions are retained because their age is
+unknown. Each matrix leg cleans only its own architecture.
+
+The planner uses the same window over existing OSS versions and upstream
+candidates. New majors and minors can enter the window, while pruned
+versions are excluded from later plans. Within active branches, the
+existing per-series roll-forward rule continues to prevent old holes from
+being backfilled.
+
+Protection is additive and can keep objects outside the numeric window:
+
+- A bare stack in the generated retention list protects that whole stack.
+- An exact `stack==version` pin protects that version on every arch/flavour.
+- A symlink and its exact target are never deleted.
+- Protection does not change the underlying major/minor/patch ranking.
+
+The retention window only selects OSS objects. It does not select tags for
+deletion; the obsolete-tag rules below are unchanged.
 
 ## Daily obsolete-tag cleanup
 

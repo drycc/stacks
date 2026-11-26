@@ -451,16 +451,55 @@ class RetentionKeepTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             checker.retention_keep(["1.0.0"], 0)
 
-    def test_default_retention_is_the_shared_constant(self):
-        # DEFAULT_RETENTION is the planner default and the reference for
-        # the cleaner's required -n value; it must stay a plain int so
-        # both tools share one retention rule without extra configuration.
-        self.assertIsInstance(checker.DEFAULT_RETENTION, int)
-        self.assertEqual(checker.DEFAULT_RETENTION, 2)
+    def test_default_retention_keeps_two_patches(self):
         versions = ["1.0.%d" % i for i in range(8)]
         kept = checker.retention_keep(versions)
-        self.assertEqual(len(kept), checker.DEFAULT_RETENTION)
-        self.assertEqual(kept[0], "1.0.7")
+        self.assertEqual(kept, ["1.0.7", "1.0.6"])
+
+
+class RetentionWindowTest(unittest.TestCase):
+    """The shared window limits majors, then minors, then patches."""
+
+    def setUp(self):
+        self.versions = [
+            "6.0.0", "6.1.0", "6.2.0",
+            "7.0.0", "7.0.1", "7.1.0", "7.2.0",
+            "8.0.0", "8.1.0", "8.1.1", "8.1.2", "8.2.0",
+            "9.0.0", "9.1.0", "9.2.0", "9.2.1", "9.2.2",
+            "10.0.0",
+        ]
+
+    def test_default_window_keeps_three_majors_two_minors_and_two_patches(self):
+        kept = checker.retention_window(self.versions)
+        self.assertEqual(
+            kept,
+            [
+                "10.0.0",
+                "9.2.2", "9.2.1", "9.1.0",
+                "8.2.0", "8.1.2", "8.1.1",
+            ],
+        )
+
+    def test_custom_window_limits_every_level(self):
+        kept = checker.retention_window(
+            self.versions, major_count=2, minor_count=1, patch_count=1,
+        )
+        self.assertEqual(kept, ["10.0.0", "9.2.2"])
+
+    def test_unparseable_versions_are_always_kept(self):
+        kept = checker.retention_window(
+            ["1.0.0", "not-a-version!"], major_count=1, minor_count=1, patch_count=1,
+        )
+        self.assertEqual(kept, ["1.0.0", "not-a-version!"])
+
+    def test_every_count_below_one_is_rejected(self):
+        for counts in (
+            {"major_count": 0},
+            {"minor_count": 0},
+            {"patch_count": 0},
+        ):
+            with self.subTest(counts=counts), self.assertRaises(ValueError):
+                checker.retention_window(["1.0.0"], **counts)
 
 
 class NoSideEffectsTest(unittest.TestCase):

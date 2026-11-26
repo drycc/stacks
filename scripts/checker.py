@@ -6,11 +6,13 @@ from datetime import datetime, timezone
 from packaging.version import InvalidVersion, parse
 
 
-# The shared retention rule: every (stack, version series) keeps the
-# newest N versions. The reconcile planner only builds inside these
-# per-series windows and the OSS cleaner only deletes outside them, so
-# cleanup never schedules a rebuild.
-DEFAULT_RETENTION = 2
+# The shared retention rule: keep the newest majors, then the newest
+# minors within each major, then the newest patches within each minor.
+# The reconcile planner only builds inside these windows and the OSS
+# cleaner only deletes outside them, so cleanup never schedules a rebuild.
+DEFAULT_MAJOR_RETENTION = 3
+DEFAULT_MINOR_RETENTION = 2
+DEFAULT_PATCH_RETENTION = 2
 
 
 github_headers = {'Authorization': 'token %s' % os.environ.get("GITHUB_TOKEN")}
@@ -501,7 +503,7 @@ def version_series(value):
     return head if separator else value
 
 
-def retention_keep(versions, count=DEFAULT_RETENTION):
+def retention_keep(versions, count=DEFAULT_PATCH_RETENTION):
     """Return the versions kept by the shared retention rule: the newest
     `count` versions by semantic order (packaging.version.parse), newest
     first.
@@ -526,6 +528,37 @@ def retention_keep(versions, count=DEFAULT_RETENTION):
             unknown.append(value)
     ranked.sort(key=lambda pair: pair[0], reverse=True)
     return [value for _, value in ranked[:count]] + unknown
+
+
+def retention_window(versions, major_count=DEFAULT_MAJOR_RETENTION,
+                     minor_count=DEFAULT_MINOR_RETENTION,
+                     patch_count=DEFAULT_PATCH_RETENTION):
+    """Return versions inside the nested major/minor/patch retention window.
+
+    Major and minor numbers come from semantic versions. Each selected
+    minor delegates patch ranking to retention_keep, so all callers share
+    the same ordering. Unparseable versions are always retained and appear
+    last in their input order.
+    """
+    if min(major_count, minor_count, patch_count) < 1:
+        raise ValueError("retention counts must be at least 1")
+    branches = {}
+    unknown = []
+    for value in versions:
+        try:
+            parsed = parse(value)
+        except InvalidVersion:
+            unknown.append(value)
+            continue
+        branches.setdefault((parsed.major, parsed.minor), []).append(value)
+    majors = {}
+    for major, minor in branches:
+        majors.setdefault(major, set()).add(minor)
+    kept = []
+    for major in sorted(majors, reverse=True)[:major_count]:
+        for minor in sorted(majors[major], reverse=True)[:minor_count]:
+            kept.extend(retention_keep(branches[(major, minor)], patch_count))
+    return kept + unknown
 
 
 github_tags_graphql = """

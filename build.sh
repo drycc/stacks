@@ -148,7 +148,12 @@ function reconcile-clean() {
   # Each matrix leg removes only its own arch, so amd64/arm64 never overlap. Dry-run
   # mode is always non-destructive; the cron configuration opts into
   # real deletion with CLEANER_DRY_RUN=0.
-  local clean_args=(-n "${CLEANER_KEEP_COUNT:-2}" --arch auto)
+  local clean_args=(
+    --keep-major-count "${CLEANER_KEEP_MAJOR_COUNT:-3}"
+    --keep-minor-count "${CLEANER_KEEP_MINOR_COUNT:-2}"
+    --keep-patch-count "${CLEANER_KEEP_PATCH_COUNT:-2}"
+    --arch auto
+  )
   local obsolete_tag_args=()
   local issue_args=(--arch auto)
   if [ "${RECONCILE_DRY_RUN:-}" = "1" ] || [ "${CLEANER_DRY_RUN:-}" = "1" ]; then
@@ -173,7 +178,7 @@ function reconcile-clean() {
     echo "reconcile: retention generation failed" >&2
     return 1
   fi
-  echo "reconcile: cleaning old OSS objects (keep=${CLEANER_KEEP_COUNT:-2} per series)"
+  echo "reconcile: cleaning old OSS objects (major=${CLEANER_KEEP_MAJOR_COUNT:-3}, minor=${CLEANER_KEEP_MINOR_COUNT:-2}, patch=${CLEANER_KEEP_PATCH_COUNT:-2})"
   if ! podman run --rm \
     --env OSS_ENDPOINT="${OSS_ENDPOINT:-}" \
     --env OSS_ACCESS_KEY_ID="${OSS_ACCESS_KEY_ID:-}" \
@@ -227,7 +232,11 @@ function reconcile {
     -v "${CURRENT_DIR}":"${CURRENT_DIR}" \
     -w "${CURRENT_DIR}" \
     "${BUILDPACK_DEP_IMAGE}" \
-    python3 scripts/reconcile.py plan "$@")
+    python3 scripts/reconcile.py plan \
+    --keep-major-count "${CLEANER_KEEP_MAJOR_COUNT:-3}" \
+    --keep-minor-count "${CLEANER_KEEP_MINOR_COUNT:-2}" \
+    --keep-patch-count "${CLEANER_KEEP_PATCH_COUNT:-2}" \
+    "$@")
   if [ -z "${plan}" ]; then
     echo "reconcile: nothing to build"
   fi

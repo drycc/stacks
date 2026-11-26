@@ -220,7 +220,9 @@ EOF
     export RECONCILE_TEST_REQUEST_RC="${RECONCILE_TEST_REQUEST_RC:-1}"
     export RECONCILE_DRY_RUN="${dry_run}"
     export CLEANER_DRY_RUN="${CLEANER_DRY_RUN:-}"
-    export CLEANER_KEEP_COUNT="${CLEANER_KEEP_COUNT:-2}"
+    export CLEANER_KEEP_MAJOR_COUNT="${CLEANER_KEEP_MAJOR_COUNT:-3}"
+    export CLEANER_KEEP_MINOR_COUNT="${CLEANER_KEEP_MINOR_COUNT:-2}"
+    export CLEANER_KEEP_PATCH_COUNT="${CLEANER_KEEP_PATCH_COUNT:-2}"
     export RECONCILE_TEST_CLEANER_RC="${RECONCILE_TEST_CLEANER_RC:-0}"
     export RECONCILE_TEST_TAG_CLEANUP_RC="${RECONCILE_TEST_TAG_CLEANUP_RC:-0}"
     export RECONCILE_TEST_ISSUE_RC="${RECONCILE_TEST_ISSUE_RC:-0}"
@@ -340,7 +342,7 @@ test_reconcile_requests_each_planned_item_without_building() {
     "${RESULT_ROOT}/state/retentions" 2> /dev/null || problems="${problems} retention-args-missing"
   [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
     || problems="${problems} cleaner-not-called"
-  grep -q -- "oss-stacks -n 2 --arch auto --confirm" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
+  grep -q -- "oss-stacks --keep-major-count 3 --keep-minor-count 2 --keep-patch-count 2 --arch auto --confirm" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
     || problems="${problems} cleaner-args-missing"
   grep -q -- "--retention-list .*retention-list.generated.txt" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
     || problems="${problems} generated-list-not-passed-to-cleaner"
@@ -472,7 +474,7 @@ test_reconcile_dry_run_prints_the_plan_without_requesting() {
   grep -q "reconcile: requesting" "${RESULT_ROOT}/out.log" && problems="${problems} unexpected-request-attempt"
   [ "$(count_calls "${RESULT_ROOT}/state/cleaners" "cleaner.py")" -eq 1 ] \
     || problems="${problems} dry-run-cleaner-not-called"
-  grep -q -- "oss-stacks -n 2 --arch auto --dry-run" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
+  grep -q -- "oss-stacks --keep-major-count 3 --keep-minor-count 2 --keep-patch-count 2 --arch auto --dry-run" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
     || problems="${problems} cleaner-dry-run-args-missing"
   [ "$(count_calls "${RESULT_ROOT}/state/tag-cleanups" "cleanup_obsolete_tags.py")" -eq 1 ] \
     || problems="${problems} dry-run-obsolete-tag-cleaner-not-called"
@@ -493,7 +495,7 @@ test_reconcile_forwards_planner_arguments() {
   out="$(run_reconcile "$(mktemp -d)" $'nginx@1.31.8\n' '' '' --arch arm64 --max-total 5)"
   parse_result "${out}"
   [ "${RESULT_RC}" -eq 0 ] || problems="${problems} exit=${RESULT_RC}"
-  grep -q "reconcile.py plan --arch arm64 --max-total 5" \
+  grep -q "reconcile.py plan --keep-major-count 3 --keep-minor-count 2 --keep-patch-count 2 --arch arm64 --max-total 5" \
     "${RESULT_ROOT}/state/plans" 2> /dev/null \
     || problems="${problems} planner-args-not-forwarded=[ $(cat "${RESULT_ROOT}/state/plans" 2> /dev/null) ]"
   if [ -z "${problems}" ]; then
@@ -504,6 +506,28 @@ test_reconcile_forwards_planner_arguments() {
     report "reconcile forwards planner arguments" 1
   fi
 }
+
+test_reconcile_shares_configured_retention_counts() {
+  local out problems=""
+  out="$(CLEANER_KEEP_MAJOR_COUNT=5 CLEANER_KEEP_MINOR_COUNT=4 CLEANER_KEEP_PATCH_COUNT=3 \
+    run_reconcile "$(mktemp -d)" $'nginx@1.31.8\n' '' '')"
+  parse_result "${out}"
+  [ "${RESULT_RC}" -eq 0 ] || problems="${problems} exit=${RESULT_RC}"
+  grep -q "reconcile.py plan --keep-major-count 5 --keep-minor-count 4 --keep-patch-count 3" \
+    "${RESULT_ROOT}/state/plans" 2> /dev/null \
+    || problems="${problems} planner-retention-args-missing"
+  grep -q -- "oss-stacks --keep-major-count 5 --keep-minor-count 4 --keep-patch-count 3 --arch auto --confirm" \
+    "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
+    || problems="${problems} cleaner-retention-args-missing"
+  if [ -z "${problems}" ]; then
+    report "reconcile shares configured retention counts" 0
+    rm -rf "${RESULT_ROOT}"
+  else
+    show_log_on_failure "${problems}" || true
+    report "reconcile shares configured retention counts" 1
+  fi
+}
+
 
 test_retention_generation_failure_skips_cleaner() {
   local out problems=""
@@ -556,7 +580,7 @@ test_cleaner_dry_run_also_disables_obsolete_tag_deletion() {
   out="$(CLEANER_DRY_RUN=1 run_reconcile "$(mktemp -d)" $'nginx@1.31.8\n' '' '')"
   parse_result "${out}"
   [ "${RESULT_RC}" -eq 0 ] || problems="${problems} exit=${RESULT_RC}"
-  grep -q -- "oss-stacks -n 2 --arch auto --dry-run" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
+  grep -q -- "oss-stacks --keep-major-count 3 --keep-minor-count 2 --keep-patch-count 2 --arch auto --dry-run" "${RESULT_ROOT}/state/cleaners" 2> /dev/null \
     || problems="${problems} cleaner-dry-run-args-missing"
   [ "$(count_calls "${RESULT_ROOT}/state/tag-cleanups" "cleanup_obsolete_tags.py")" -eq 1 ] \
     || problems="${problems} obsolete-tag-cleaner-not-called"
@@ -966,6 +990,7 @@ main() {
   test_reconcile_with_empty_plan_requests_nothing
   test_reconcile_dry_run_prints_the_plan_without_requesting
   test_reconcile_forwards_planner_arguments
+  test_reconcile_shares_configured_retention_counts
   test_retention_generation_failure_skips_cleaner
   test_reconcile_cleaner_failure_fails_the_run
   test_cleaner_dry_run_also_disables_obsolete_tag_deletion

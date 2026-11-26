@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-OSS stack cleaner: keep only the newest N versions in each series, with
-an explicit retention list for objects that must never be deleted.
+OSS stack cleaner with an explicit retention list for protected objects.
 
-A series is the version with its final dot-separated component removed
-(13.4 -> 13, 8.0.1 -> 8.0). Retention is independent per
-(stack, series, arch, flavour). The nightly reconcile planner rolls
-forward within the same series, so pruned versions are not planned again.
-checker.retention_keep provides the shared semantic ordering.
+Retention is independent per (stack, arch, flavour). The default nested
+window keeps the newest 3 majors, the newest 2 minors within each major,
+and the newest 2 patches within each minor. The nightly planner uses the
+same window and rolls forward within each series, so pruned versions are
+not planned again. checker.retention_window provides the shared ordering.
 
-    python cleaner.py oss-stacks -n 2 [--arch ARCH] [--retention-list PATH]
+    python cleaner.py oss-stacks [--keep-major-count N]
+                                      [--keep-minor-count N]
+                                      [--keep-patch-count N]
+                                      [--arch ARCH] [--retention-list PATH]
                                       [--dry-run] [--confirm]
 
 Use --arch auto in CI so each matrix leg cleans only its own objects;
@@ -30,7 +32,7 @@ Versions are exact OSS version strings, not prefixes or ranges: 3.15
 does not match 3.15.0. Use == to pin a version; a single = is an error.
 Bare stacks are excluded before retention ranking. Exact pins are then
 applied as a final veto to the prune list, without changing the ranking,
-so an old pinned version may keep a group above N objects.
+so protected objects may remain outside the retention window.
 
 Version-pointer symlinks are never deleted. Use bare stack entries for
 runtimes such as go/java/node/php/python/ruby/rust when their pointer
@@ -195,23 +197,36 @@ def retention_groups(objects, protected_stacks=(), arch=None):
     return groups, skipped
 
 
-def retention_prune(groups, count, protected_versions=(), protected_keys=()):
-    """Plan the per-series retention prune with protection vetoes.
+def retention_prune(groups, patch_count=checker.DEFAULT_PATCH_RETENTION,
+                    protected_versions=(), protected_keys=(),
+                    major_count=checker.DEFAULT_MAJOR_RETENTION,
+                    minor_count=checker.DEFAULT_MINOR_RETENTION):
+    """Plan the nested retention prune with protection vetoes.
 
-    Returns (victims, lines, protected). Exact (stack, version) pins and
-    exact symlink target keys are removed only after each series has been
-    ranked, so protection never changes the unprotected ordering. Every
-    victim is older than its series' newest retained version, and the
-    nightly planner rolls forward within the same series, so victims are
-    never rebuilt.
+    Returns (victims, lines, protected). Windows are independent per
+    stack/arch/flavour. Exact pins and symlink targets are removed only
+    after the unprotected window has been ranked, so protection never
+    changes that ranking. The nightly planner uses the same window and
+    roll-forward rules, so victims are never rebuilt.
     """
     protected_versions = frozenset(protected_versions)
     protected_keys = frozenset(protected_keys)
+    window_versions = {}
+    for (stack, _, arch, flavour), versions in groups.items():
+        window_versions.setdefault((stack, arch, flavour), []).extend(versions)
+    retained_by_window = {
+        window: set(checker.retention_window(
+            versions, major_count=major_count, minor_count=minor_count,
+            patch_count=patch_count,
+        ))
+        for window, versions in window_versions.items()
+    }
     victims = []
     lines = []
     protected = []
     for (stack, series, arch, flavour), versions in sorted(groups.items()):
-        retained = checker.retention_keep(list(versions), count)
+        retained = retained_by_window[(stack, arch, flavour)]
+        retained_here = [version for version in versions if version in retained]
         doomed = sorted(
             (version for version in versions if version not in retained),
             key=parse_version,  # oldest first; every doomed version is parseable
@@ -228,7 +243,7 @@ def retention_prune(groups, count, protected_versions=(), protected_keys=()):
             lines.append(
                 "  %s/%s linux-%s-%s: keeping %d of %d versions, deleting %s"
                 % (stack, series, arch, flavour,
-                   len(retained) + len(protected_here), len(versions),
+                   len(retained_here) + len(protected_here), len(versions),
                    ", ".join(doomed))
             )
             victims.extend(versions[version] for version in doomed)
@@ -262,7 +277,7 @@ def delete_objects(bucket, keys, dry_run=False):
 
 
 def clean_oss_stacks(args, retention_list_stacks, retention_list_versions):
-    """Delete versions outside the newest-N retention window, except
+    """Delete versions outside the nested retention window, except
     objects protected by the already-loaded retention list."""
     try:
         bucket = _oss_bucket()
@@ -284,10 +299,13 @@ def clean_oss_stacks(args, retention_list_stacks, retention_list_versions):
     groups, skipped = retention_groups(
         objects, protected_stacks=retention_list_stacks, arch=args.arch)
     keys, detail, protected = retention_prune(
-        groups, args.keep_count, retention_list_versions,
-        protected_keys=symlink_targets)
-    header = (f"Retention: keep the newest {args.keep_count} version(s) per"
-              f" series/arch/flavour, {len(keys)} object(s) scheduled for deletion")
+        groups, args.keep_patch_count, retention_list_versions,
+        protected_keys=symlink_targets,
+        major_count=args.keep_major_count, minor_count=args.keep_minor_count)
+    header = (f"Retention: keep the newest {args.keep_major_count} major(s), "
+              f"{args.keep_minor_count} minor(s) per major, "
+              f"{args.keep_patch_count} patch(es) per minor per stack/arch/flavour, "
+              f"{len(keys)} object(s) scheduled for deletion")
     if skipped["symlinks"]:
         header += f", skipping {skipped['symlinks']} symlink(s)"
     if skipped["unparsed"]:
@@ -318,13 +336,14 @@ def clean_oss_stacks(args, retention_list_stacks, retention_list_versions):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description='OSS stack cleaner: keep the newest N versions per series',
+        description='OSS stack cleaner: keep nested major/minor/patch windows',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python cleaner.py oss-stacks -n 2 --dry-run                           # Preview with the default retention list
-  python cleaner.py oss-stacks -n 2 --retention-list /path/to/retention-list.txt  # Use an explicit retention list
-  python cleaner.py oss-stacks -n 2 --arch auto --confirm               # Clean only the current arch
+  python cleaner.py oss-stacks --dry-run
+  python cleaner.py oss-stacks --keep-major-count 3 --keep-minor-count 2 --keep-patch-count 2
+  python cleaner.py oss-stacks --retention-list /path/to/retention-list.txt
+  python cleaner.py oss-stacks --arch auto --confirm
 
 Retention list entries are 'python' (protect the whole stack) or
 'valkey==3.15' (protect exactly that version). A single '=' is invalid.
@@ -334,10 +353,16 @@ Missing or malformed retention list files abort before OSS is contacted.
     subparsers = parser.add_subparsers(dest='action', help='Cleanup action to perform')
 
     oss_parser = subparsers.add_parser(
-        'oss-stacks', help='Delete OSS stack versions beyond the newest N')
+        'oss-stacks', help='Delete OSS stack versions outside the nested retention window')
     oss_parser.add_argument(
-        '-n', '--keep-count', type=int, required=True,
-        help='keep the newest N versions per stack/arch/flavour and delete the older ones')
+        '--keep-major-count', type=int, default=checker.DEFAULT_MAJOR_RETENTION,
+        help='major versions kept per stack/arch/flavour (default: %(default)s)')
+    oss_parser.add_argument(
+        '--keep-minor-count', type=int, default=checker.DEFAULT_MINOR_RETENTION,
+        help='minor versions kept per major (default: %(default)s)')
+    oss_parser.add_argument(
+        '--keep-patch-count', type=int, default=checker.DEFAULT_PATCH_RETENTION,
+        help='patch versions kept per minor (default: %(default)s)')
     oss_parser.add_argument(
         '--retention-list', default=DEFAULT_RETENTION_LIST,
         help='retention list file (default: retention-list.txt in the repository root)')
@@ -357,8 +382,10 @@ Missing or malformed retention list files abort before OSS is contacted.
         return 1
 
     if args.action == 'oss-stacks':
-        if args.keep_count < 1:
-            oss_parser.error("--keep-count must be at least 1")
+        for level in ("major", "minor", "patch"):
+            option = "--keep-%s-count" % level
+            if getattr(args, "keep_%s_count" % level) < 1:
+                oss_parser.error("%s must be at least 1" % option)
         if args.arch == "auto":
             args.arch = detect_arch()
         try:

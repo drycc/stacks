@@ -30,4 +30,6 @@ steps:
       from_secret: github_token
     RECONCILE_DRY_RUN: "0"
     CLEANER_DRY_RUN: "0"
-    CLEANER_KEEP_COUNT: "2"
+    CLEANER_KEEP_MAJOR_COUNT: "3"
+    CLEANER_KEEP_MINOR_COUNT: "2"
+    CLEANER_KEEP_PATCH_COUNT: "2"

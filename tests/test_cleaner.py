@@ -1,15 +1,15 @@
 """Tests for scripts/cleaner.py.
 
-The cleaner has one cleanup mode: per (stack, series, arch, flavour)
-group, keep the newest N versions and delete the older ones. The nightly
-planner rolls forward within the same series, so pruned versions are not
-planned again. A local retention list protects whole stacks (python) or
-exact versions (valkey==3.15) from deletion; it replaces the retired
+The cleaner keeps nested major/minor/patch windows independently per
+(stack, arch, flavour). The nightly planner uses the same windows and
+rolls forward within each series, so pruned versions are not planned
+again. A local retention list protects whole stacks (python) or exact
+versions (valkey==3.15) from deletion; it replaces the retired
 --skip-stack flag.
 
 Version-pointer symlinks (go-1.24 -> go-1.24.5 style) are never deleted;
-the tests pin that -n leaves them alone and that retention list rules are
-honoured across arches and flavours.
+the tests pin that patch retention leaves them alone and that retention
+list rules are honoured across arches and flavours.
 
 Run: .venv/bin/python -m unittest discover -s tests -p 'test_cleaner.py' -v
 """
@@ -19,7 +19,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
@@ -276,6 +276,45 @@ class RetentionPruneTest(unittest.TestCase):
         self.assertEqual(victims, [])
         self.assertEqual(lines, [])
 
+    def test_nested_window_prunes_old_majors_minors_and_patches(self):
+        versions = (
+            "6.0.0", "7.0.0", "8.0.0", "9.0.0", "9.1.0",
+            "9.2.1", "9.2.2", "9.2.3",
+        )
+        groups, _ = cleaner.retention_groups([(go_key(v), "Normal") for v in versions])
+        victims, _, _ = cleaner.retention_prune(
+            groups, major_count=3, minor_count=2, patch_count=2,
+        )
+        self.assertEqual(
+            set(victims),
+            {go_key("6.0.0"), go_key("9.0.0"), go_key("9.2.1")},
+        )
+
+    def test_nested_windows_are_independent_per_arch_and_flavour(self):
+        objects = [
+            (go_key("6.0.0"), "Normal"),
+            (go_key("7.0.0"), "Normal"),
+            (go_key("8.0.0"), "Normal"),
+            (go_key("9.0.0"), "Normal"),
+            (go_key("6.0.0", arch="arm64"), "Normal"),
+            (go_key("6.0.0", flavour="debian-12"), "Normal"),
+        ]
+        groups, _ = cleaner.retention_groups(objects)
+        victims, _, _ = cleaner.retention_prune(
+            groups, major_count=3, minor_count=2, patch_count=2,
+        )
+        self.assertEqual(victims, [go_key("6.0.0")])
+
+    def test_protection_vetoes_an_old_major_without_changing_the_window(self):
+        versions = ("6.0.0", "7.0.0", "8.0.0", "9.0.0")
+        groups, _ = cleaner.retention_groups([(go_key(v), "Normal") for v in versions])
+        victims, _, protected = cleaner.retention_prune(
+            groups, major_count=3, minor_count=2, patch_count=2,
+            protected_versions={("go", "6.0.0")},
+        )
+        self.assertEqual(victims, [])
+        self.assertEqual(protected, [go_key("6.0.0")])
+
 
 class RetentionCliTest(unittest.TestCase):
     def setUp(self):
@@ -310,25 +349,25 @@ class RetentionCliTest(unittest.TestCase):
         return rc, stdout.getvalue()
 
     def test_confirm_prunes_beyond_top_n(self):
-        rc, out = self.run_cli(["oss-stacks", "-n", "3", "--confirm"])
+        rc, out = self.run_cli(["oss-stacks", "--keep-patch-count", "3", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [go_key("1.24.2")])
         self.assertIn("keeping 3 of 4", out)
-        self.assertIn("per series/arch/flavour", out)
+        self.assertIn("per stack/arch/flavour", out)
         self.assertIn("deleting 1.24.2", out)
 
     def test_symlinks_are_never_deleted(self):
-        self.run_cli(["oss-stacks", "-n", "3", "--confirm"])
+        self.run_cli(["oss-stacks", "--keep-patch-count", "3", "--confirm"])
         self.assertNotIn(go_key("1.24"), self.bucket.deleted)
 
     def test_dry_run_lists_without_deleting(self):
-        rc, out = self.run_cli(["oss-stacks", "-n", "3", "--dry-run"], inputs=[])
+        rc, out = self.run_cli(["oss-stacks", "--keep-patch-count", "3", "--dry-run"], inputs=[])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [])
         self.assertIn("[DRY RUN] Would delete: %s" % go_key("1.24.2"), out)
 
     def test_declined_prompt_keeps_objects(self):
-        rc, out = self.run_cli(["oss-stacks", "-n", "3"], inputs=["n"])
+        rc, out = self.run_cli(["oss-stacks", "--keep-patch-count", "3"], inputs=["n"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [])
         self.assertIn("Aborted", out)
@@ -338,18 +377,18 @@ class RetentionCliTest(unittest.TestCase):
         with mock.patch("cleaner._oss_bucket", return_value=self.bucket), \
                 mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(objects)), \
                 mock.patch("builtins.input", side_effect=AssertionError("must not prompt")):
-            rc = cleaner.main(["oss-stacks", "-n", "3"])
+            rc = cleaner.main(["oss-stacks", "--keep-patch-count", "3"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [])
 
     def test_deletion_failure_returns_non_zero(self):
         with mock.patch("cleaner._oss_bucket", return_value=FailingBucket()), \
                 mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
-            rc = cleaner.main(["oss-stacks", "-n", "3", "--confirm"])
+            rc = cleaner.main(["oss-stacks", "--keep-patch-count", "3", "--confirm"])
         self.assertEqual(rc, 1)
 
     def test_suffix_option_is_rejected(self):
-        # the suffix purge was retired: -n retention is the only cleanup
+        # the suffix purge was retired: the nested window is the only cleanup
         # mode, and the retention list is its protection filter, not a second mode
         with mock.patch("cleaner._oss_bucket", return_value=self.bucket), \
                 mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
@@ -359,14 +398,38 @@ class RetentionCliTest(unittest.TestCase):
                 ])
         self.assertEqual(ctx.exception.code, 2)
 
-    def test_missing_keep_count_is_rejected(self):
-        with self.assertRaises(SystemExit) as ctx:
-            cleaner.main(["oss-stacks"])
-        self.assertEqual(ctx.exception.code, 2)
+    def test_default_counts_limit_all_three_levels(self):
+        self.objects = [
+            FakeObject(go_key(version))
+            for version in (
+                "6.0.0", "7.0.0", "8.0.0", "9.0.0", "9.1.0",
+                "9.2.1", "9.2.2", "9.2.3",
+            )
+        ]
+        rc, out = self.run_cli(["oss-stacks", "--confirm"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            set(self.bucket.deleted),
+            {go_key("6.0.0"), go_key("9.0.0"), go_key("9.2.1")},
+        )
+        self.assertIn("3 major(s), 2 minor(s) per major, 2 patch(es) per minor", out)
 
-    def test_zero_keep_count_is_rejected(self):
-        with self.assertRaises(SystemExit) as ctx:
-            cleaner.main(["oss-stacks", "-n", "0"])
+    def test_every_zero_keep_count_is_rejected_before_oss(self):
+        for option in ("major", "minor", "patch"):
+            flag = "--keep-%s-count" % option
+            stderr = io.StringIO()
+            with self.subTest(flag=flag), \
+                    mock.patch("cleaner._oss_bucket") as bucket, \
+                    redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as ctx:
+                    cleaner.main(["oss-stacks", flag, "0"])
+                self.assertEqual(ctx.exception.code, 2)
+                self.assertIn("%s must be at least 1" % flag, stderr.getvalue())
+                bucket.assert_not_called()
+
+    def test_old_keep_count_option_is_rejected(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            self.run_cli(["oss-stacks", "-n", "2", "--dry-run"])
         self.assertEqual(ctx.exception.code, 2)
 
 
@@ -405,7 +468,7 @@ class SymlinkAndArchCliTest(unittest.TestCase):
             FakeObject(go_key("1.24"), "Symlink"),
         ]
         self.bucket.symlinks[go_key("1.24")] = go_key("1.24.12")
-        rc, out = self.run_cli(objects, ["oss-stacks", "-n", "1", "--confirm"])
+        rc, out = self.run_cli(objects, ["oss-stacks", "--keep-patch-count", "1", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [go_key("1.24.11")])
         self.assertNotIn(go_key("1.24.12"), self.bucket.deleted)
@@ -418,7 +481,7 @@ class SymlinkAndArchCliTest(unittest.TestCase):
             FakeObject(go_key("1.24.12")),
             FakeObject(go_key("1.24"), "Symlink"),
         ]
-        rc, _ = self.run_cli(objects, ["oss-stacks", "-n", "1", "--confirm"])
+        rc, _ = self.run_cli(objects, ["oss-stacks", "--keep-patch-count", "1", "--confirm"])
         self.assertEqual(rc, 1)
         self.assertEqual(self.bucket.deleted, [])
 
@@ -432,7 +495,7 @@ class SymlinkAndArchCliTest(unittest.TestCase):
                 FakeObject(go_key("1.24", arch=arch), "Symlink"),
             ])
             self.bucket.symlinks[go_key("1.24", arch=arch)] = go_key("1.24.12", arch=arch)
-        rc, out = self.run_cli(objects, ["oss-stacks", "-n", "1", "--arch", "arm64", "--confirm"])
+        rc, out = self.run_cli(objects, ["oss-stacks", "--keep-patch-count", "1", "--arch", "arm64", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [go_key("1.24.11", arch="arm64")])
         self.assertEqual(self.bucket.symlink_calls, [go_key("1.24", arch="arm64")])
@@ -446,7 +509,7 @@ class SymlinkAndArchCliTest(unittest.TestCase):
             FakeObject(nginx_key("1.31.8")),
         ]
         self.bucket.symlinks["stacks/nginx/latest.tar.gz"] = nginx_key("1.31.8")
-        rc, _ = self.run_cli(objects, ["oss-stacks", "-n", "1", "--confirm"])
+        rc, _ = self.run_cli(objects, ["oss-stacks", "--keep-patch-count", "1", "--confirm"])
         self.assertEqual(rc, 1)
         self.assertEqual(self.bucket.deleted, [])
 
@@ -460,7 +523,7 @@ class SymlinkAndArchCliTest(unittest.TestCase):
         self.bucket.symlinks[go_key("1.24")] = go_key("1.24.12")
         with open(self.retention_list, "w") as f:
             f.write("go==1.24.12\n")
-        rc, out = self.run_cli(objects, ["oss-stacks", "-n", "1", "--confirm"])
+        rc, out = self.run_cli(objects, ["oss-stacks", "--keep-patch-count", "1", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [go_key("1.24.11")])
         self.assertIn("1 protected object(s)", out)
@@ -473,7 +536,7 @@ class SymlinkAndArchCliTest(unittest.TestCase):
             FakeObject(go_key("1.24"), "Symlink"),
         ]
         self.bucket.symlinks[go_key("1.24")] = go_key("1.24.12")
-        rc, out = self.run_cli(objects, ["oss-stacks", "-n", "1", "--confirm"])
+        rc, out = self.run_cli(objects, ["oss-stacks", "--keep-patch-count", "1", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [])
         self.assertIn("all versions beyond retention are protected.", out)
@@ -517,14 +580,14 @@ class RetentionListCliTest(unittest.TestCase):
 
     def test_bare_stack_protects_every_version(self):
         self.write_retention_list("go\n")
-        rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
+        rc, out = self.run_cli(["oss-stacks", "--keep-patch-count", "2", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [nginx_key("1.31.7")])
         self.assertIn("1 stack rule(s)", out)
 
     def test_exact_pin_is_an_extra_veto_outside_retention(self):
         self.write_retention_list("go==1.24.3\n")
-        rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
+        rc, out = self.run_cli(["oss-stacks", "--keep-patch-count", "2", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(
             self.bucket.deleted,
@@ -543,7 +606,7 @@ class RetentionListCliTest(unittest.TestCase):
             FakeObject(go_key("1.24.3")),
         ]
         self.write_retention_list("go==1.24.3\n")
-        rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
+        rc, out = self.run_cli(["oss-stacks", "--keep-patch-count", "2", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(self.bucket.deleted, [])
         self.assertIn("retention list protecting 1.24.3", out)
@@ -554,7 +617,7 @@ class RetentionListCliTest(unittest.TestCase):
         # 1.24.4 is already inside newest-2, so the pin protects no
         # additional object and both older versions are still pruned.
         self.write_retention_list("go==1.24.4\n")
-        rc, out = self.run_cli(["oss-stacks", "-n", "2", "--confirm"])
+        rc, out = self.run_cli(["oss-stacks", "--keep-patch-count", "2", "--confirm"])
         self.assertEqual(rc, 0)
         self.assertEqual(
             self.bucket.deleted,
@@ -568,7 +631,7 @@ class RetentionListCliTest(unittest.TestCase):
                 mock.patch("cleaner._oss_bucket", return_value=self.bucket) as bucket, \
                 mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
             with self.assertRaises(SystemExit) as ctx:
-                cleaner.main(["oss-stacks", "-n", "2", "--dry-run"])
+                cleaner.main(["oss-stacks", "--keep-patch-count", "2", "--dry-run"])
         self.assertEqual(ctx.exception.code, 2)
         bucket.assert_not_called()
 
@@ -578,7 +641,7 @@ class RetentionListCliTest(unittest.TestCase):
                 mock.patch("cleaner._oss_bucket", return_value=self.bucket) as bucket, \
                 mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
             with self.assertRaises(SystemExit) as ctx:
-                cleaner.main(["oss-stacks", "-n", "2", "--dry-run"])
+                cleaner.main(["oss-stacks", "--keep-patch-count", "2", "--dry-run"])
         self.assertEqual(ctx.exception.code, 2)
         bucket.assert_not_called()
 
@@ -589,7 +652,7 @@ class RetentionListCliTest(unittest.TestCase):
                 mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
             with self.assertRaises(SystemExit) as ctx:
                 cleaner.main([
-                    "oss-stacks", "-n", "2", "--skip-stack", "go", "--dry-run",
+                    "oss-stacks", "--keep-patch-count", "2", "--skip-stack", "go", "--dry-run",
                 ])
         self.assertEqual(ctx.exception.code, 2)
 
@@ -600,7 +663,7 @@ class RetentionListCliTest(unittest.TestCase):
                 mock.patch("cleaner.oss2.ObjectIterator", fake_iterate(self.objects)):
             with self.assertRaises(SystemExit) as ctx:
                 cleaner.main([
-                    "oss-stacks", "-n", "2", "--whitelist", self.retention_list_path,
+                    "oss-stacks", "--keep-patch-count", "2", "--whitelist", self.retention_list_path,
                     "--dry-run",
                 ])
         self.assertEqual(ctx.exception.code, 2)

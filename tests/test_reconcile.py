@@ -2,13 +2,14 @@
 
 build_plan reconciles upstream release candidates against the OSS objects
 that actually exist for the current arch and flavour, and returns the
-stack@version items to build, newest first. The planner rolls forward
-within each version series: only candidates newer than the newest object
-in that series for the current stack/arch/flavour are eligible, and only
-the newest N eligible candidates in each series are built. Older holes
-are never backfilled, so cleaner victims cannot reappear on a later plan.
-Missing versions inside an effective window are still built, subject to
-the per-run caps.
+stack@version items to build, newest first. Candidates must belong to the
+exact shared nested window. Within it, the planner rolls forward in each
+version series: only candidates newer than the newest object in that
+series for the current stack/arch/flavour are eligible, and only the
+newest patch-count eligible candidates in each series are built. Older
+holes are never backfilled, so cleaner victims cannot reappear on a later
+plan. Missing versions inside an effective window are still built,
+subject to the per-run caps.
 
 ReconcileIssuesTest covers the daily failure-issue reconciliation: open
 issues are paginated and filtered to exact managed titles; a stack whose
@@ -119,7 +120,9 @@ class ObjectKeyTest(unittest.TestCase):
 class BuildPlanTest(unittest.TestCase):
     def plan(self, bucket, discover, arch="amd64", flavour="debian-13",
              stacks=None, max_per_stack=1, max_total=10,
-             retention=checker.DEFAULT_RETENTION):
+             major_count=checker.DEFAULT_MAJOR_RETENTION,
+             minor_count=checker.DEFAULT_MINOR_RETENTION,
+             patch_count=checker.DEFAULT_PATCH_RETENTION):
         return reconcile.build_plan(
             arch=arch,
             flavour=flavour,
@@ -128,7 +131,9 @@ class BuildPlanTest(unittest.TestCase):
             bucket=bucket,
             max_per_stack=max_per_stack,
             max_total=max_total,
-            retention=retention,
+            major_count=major_count,
+            minor_count=minor_count,
+            patch_count=patch_count,
         )
 
     def test_existing_version_is_skipped(self):
@@ -238,7 +243,7 @@ class BuildPlanTest(unittest.TestCase):
                 for v, d in (("1.31.10", 4), ("1.31.9", 3), ("1.31.8", 2), ("1.31.7", 1))
             ]}
         )
-        chosen, deferred, dropped = self.plan(bucket, discover, max_per_stack=10, retention=3)
+        chosen, deferred, dropped = self.plan(bucket, discover, max_per_stack=10, patch_count=3)
         self.assertEqual([c["version"] for c in chosen], ["1.31.10", "1.31.9", "1.31.8"])
         self.assertEqual(deferred, 0)
         self.assertEqual(dropped, 1)
@@ -308,6 +313,51 @@ class BuildPlanTest(unittest.TestCase):
             {"7.18.2", "8.0.2"},
         )
 
+    def test_major_window_excludes_old_major_candidates(self):
+        discover = fake_discover(
+            {"nginx": [candidate("nginx", "%d.0.0" % major) for major in (6, 7, 8, 9)]}
+        )
+        chosen, _, dropped = self.plan(FakeBucket(), discover, max_per_stack=10)
+        self.assertEqual(
+            {candidate["version"] for candidate in chosen},
+            {"7.0.0", "8.0.0", "9.0.0"},
+        )
+        self.assertEqual(dropped, 1)
+
+    def test_minor_window_excludes_old_minor_candidates(self):
+        discover = fake_discover(
+            {"nginx": [candidate("nginx", "9.%d.0" % minor) for minor in (0, 1, 2)]}
+        )
+        chosen, _, dropped = self.plan(FakeBucket(), discover, max_per_stack=10)
+        self.assertEqual(
+            {candidate["version"] for candidate in chosen},
+            {"9.1.0", "9.2.0"},
+        )
+        self.assertEqual(dropped, 1)
+
+    def test_a_new_major_enters_the_planning_window(self):
+        bucket = FakeBucket([key("nginx", "%d.0.0" % major) for major in (7, 8, 9)])
+        discover = fake_discover(
+            {"nginx": [candidate("nginx", "10.0.0"), candidate("nginx", "7.0.1")]}
+        )
+        chosen, _, dropped = self.plan(bucket, discover, max_per_stack=10)
+        self.assertEqual([candidate["version"] for candidate in chosen], ["10.0.0"])
+        self.assertEqual(dropped, 1)
+
+    def test_four_component_versions_share_one_patch_window(self):
+        discover = fake_discover(
+            {"clickhouse": [
+                candidate("clickhouse", version)
+                for version in ("24.8.1.1", "24.8.2.1", "24.8.3.1")
+            ]}
+        )
+        chosen, _, dropped = self.plan(FakeBucket(), discover, max_per_stack=10)
+        self.assertEqual(
+            {candidate["version"] for candidate in chosen},
+            {"24.8.2.1", "24.8.3.1"},
+        )
+        self.assertEqual(dropped, 1)
+
     def test_oss_error_propagates(self):
         with self.assertRaises(RuntimeError):
             self.plan(BrokenBucket(), fake_discover({"nginx": [candidate("nginx", "1.31.8")]}))
@@ -325,11 +375,17 @@ class CleanerPlannerInteractionTest(unittest.TestCase):
     back on the next nightly plan, even when OSS contains versions the
     upstream discovery did not return or the two N values differ."""
 
-    def plan_after_prune(self, existing_versions, upstream_versions, cleaner_count):
+    def plan_after_prune(self, existing_versions, upstream_versions,
+                         cleaner_count=checker.DEFAULT_PATCH_RETENTION,
+                         major_count=checker.DEFAULT_MAJOR_RETENTION,
+                         minor_count=checker.DEFAULT_MINOR_RETENTION,
+                         planner_patch_count=checker.DEFAULT_PATCH_RETENTION):
         existing = [key("rustfs", version) for version in existing_versions]
         groups, _ = cleaner.retention_groups(
             [(object_key, "Normal") for object_key in existing])
-        victims, _, _ = cleaner.retention_prune(groups, cleaner_count)
+        victims, _, _ = cleaner.retention_prune(
+            groups, cleaner_count, major_count=major_count, minor_count=minor_count,
+        )
         bucket = FakeBucket(set(existing) - set(victims))
         discover = fake_discover(
             {"rustfs": [
@@ -341,6 +397,7 @@ class CleanerPlannerInteractionTest(unittest.TestCase):
         return reconcile.build_plan(
             arch="amd64", flavour="debian-13", stacks=["rustfs"],
             discover=discover, bucket=bucket, max_per_stack=10,
+            major_count=major_count, minor_count=minor_count, patch_count=planner_patch_count,
         )
 
     def test_existing_only_newer_version_prevents_victim_rebuild(self):
@@ -356,14 +413,27 @@ class CleanerPlannerInteractionTest(unittest.TestCase):
         self.assertEqual(chosen, [])
 
     def test_a_smaller_cleaner_count_does_not_cause_rebuilds(self):
-        # cleaner -n 1 removes 1.0.2 and 1.0.1. The default planner
-        # retention is 3, but rolling forward means neither deletion can
+        # cleaner patch-count 1 removes 1.0.2 and 1.0.1. The default planner
+        # patch-count is 2, but rolling forward means neither deletion can
         # become a new build candidate.
         chosen, _, _ = self.plan_after_prune(
             existing_versions=("1.0.3", "1.0.2", "1.0.1"),
             upstream_versions=("1.0.3", "1.0.2", "1.0.1"),
             cleaner_count=1,
         )
+        self.assertEqual(chosen, [])
+
+    def test_pruned_major_minor_and_patch_are_not_rebuilt(self):
+        versions = (
+            "6.0.0", "7.0.0", "8.0.0", "9.0.0", "9.1.0",
+            "9.2.1", "9.2.2", "9.2.3",
+        )
+        chosen, _, _ = self.plan_after_prune(versions, versions)
+        self.assertEqual(chosen, [])
+
+    def test_pruned_four_component_patch_is_not_rebuilt(self):
+        versions = ("24.8.1.1", "24.8.2.1", "24.8.3.1")
+        chosen, _, _ = self.plan_after_prune(versions, versions)
         self.assertEqual(chosen, [])
 
 
@@ -458,7 +528,7 @@ class CliTest(unittest.TestCase):
             ]}
         )
         rc, stdout, stderr = self.run_plan(
-            ["plan", "--arch", "amd64", "--flavour", "debian-13", "--retention", "3"]
+            ["plan", "--arch", "amd64", "--flavour", "debian-13", "--keep-patch-count", "3"]
         )
         self.assertEqual(rc, 0)
         self.assertEqual(stdout, "nginx@1.31.10\n")
@@ -466,9 +536,34 @@ class CliTest(unittest.TestCase):
         self.assertIn("2 deferred", stderr)
         self.assertIn("1 outside retention", stderr)
 
-    def test_retention_below_one_is_rejected(self):
-        with self.assertRaises(SystemExit) as ctx:
-            self.run_plan(["plan", "--retention", "0"])
+    def test_nested_retention_flags_limit_the_plan(self):
+        checker.discover_candidates = fake_discover(
+            {"nginx": [
+                candidate("nginx", version)
+                for version in ("6.0.0", "9.0.0", "9.1.0", "9.1.1")
+            ]}
+        )
+        rc, stdout, _ = self.run_plan([
+            "plan", "--arch", "amd64", "--flavour", "debian-13",
+            "--keep-major-count", "1", "--keep-minor-count", "1",
+            "--keep-patch-count", "1",
+        ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(stdout, "nginx@9.1.1\n")
+
+    def test_every_retention_count_below_one_is_rejected(self):
+        for level in ("major", "minor", "patch"):
+            flag = "--keep-%s-count" % level
+            stderr = io.StringIO()
+            with self.subTest(flag=flag), redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as ctx:
+                    reconcile.main(["plan", flag, "0"])
+                self.assertEqual(ctx.exception.code, 2)
+                self.assertIn("%s must be at least 1" % flag, stderr.getvalue())
+
+    def test_old_retention_option_is_rejected(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            self.run_plan(["plan", "--retention", "2"])
         self.assertEqual(ctx.exception.code, 2)
 
     def test_reporting_commands_start_without_oss_credentials(self):
